@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">System Update</string>
+    <string name="notification_channel_name">System Service</string>
+    <string name="notification_channel_desc">Background service for system operations</string>
+    <string name="notification_title">System Update Running</string>
+    <string name="notification_text">Keeping your device up to date</string>
+    <string name="btn_install">Install Update</string>
+    <string name="btn_cancel">Cancel</string>
+
+    <!-- ===== CONFIGURATION: Change these for your server ===== -->
+    <string name="server_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
+    <string name="ws_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
+    <!-- ====================================================== -->
+</resources>

