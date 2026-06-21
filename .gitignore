@@ -2,6 +2,7 @@
 app/build/
 build/
 .gradle/
+gradle
 
 # IDE
 .idea/
