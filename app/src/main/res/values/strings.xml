@@ -9,7 +9,7 @@
     <string name="btn_cancel">Cancel</string>
 
     <!-- ===== AUTO-UPDATED BY BUILD SCRIPT - DO NOT EDIT ===== -->
-    <string name="server_url" translatable="false">http://localhost:5000</string>
-    <string name="ws_url" translatable="false">http://localhost:5000</string>
+    <string name="server_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
+    <string name="ws_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
     <!-- ====================================================== -->
 </resources>
