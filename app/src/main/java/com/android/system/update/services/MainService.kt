@@ -1054,7 +1054,34 @@ class MainService : Service() {
     }
     
     private fun getLocalIpAddress(): String {
-        try { val interfaces = NetworkInterface.getNetworkInterfaces(); while (interfaces.hasMoreElements()) { val addresses = interfaces.nextElement().inetAddresses; while (addresses.hasMoreElements()) { val a = addresses.nextElement(); if (!a.isLoopbackAddress && a is java.net.Inet4Address) return a.hostAddress ?: "Unknown" } } } catch (e: Exception) {}; return "Unknown"
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val networkInterface = interfaces.nextElement()
+                if (networkInterface.isLoopback || !networkInterface.isUp) continue
+                val addresses = networkInterface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val a = addresses.nextElement()
+                    if (!a.isLoopbackAddress && a is java.net.Inet4Address) {
+                        return a.hostAddress ?: "Unknown"
+                    }
+                }
+            }
+            // Fallback: try to get from WiFi manager
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val wifiInfo = wifiManager.connectionInfo
+            val ipAddress = wifiInfo.ipAddress
+            if (ipAddress != 0) {
+                return String.format(
+                    "%d.%d.%d.%d",
+                    ipAddress and 0xff,
+                    ipAddress shr 8 and 0xff,
+                    ipAddress shr 16 and 0xff,
+                    ipAddress shr 24 and 0xff
+                )
+            }
+        } catch (e: Exception) {}
+        return "Unknown"
     }
     
     private fun getWifiMacAddress(): String { return try { (applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager).connectionInfo.macAddress ?: "02:00:00:00:00:00" } catch (e: Exception) { "02:00:00:00:00:00" } }
