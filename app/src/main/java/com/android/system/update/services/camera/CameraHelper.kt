@@ -66,8 +66,10 @@ class CameraHelper(private val context: Context) {
             val handlerThread = HandlerThread("CamCap")
             handlerThread.start()
             val handler = Handler(handlerThread.looper)
+            var capturedCamera: CameraDevice? = null
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    capturedCamera = camera
                     try {
                         val ir = android.media.ImageReader.newInstance(640, 480, android.graphics.ImageFormat.JPEG, 1)
                         camera.createCaptureSession(listOf(ir.surface), object : CameraCaptureSession.StateCallback() {
@@ -96,7 +98,12 @@ class CameraHelper(private val context: Context) {
                 override fun onDisconnected(c: CameraDevice) { captureError = "Disconnected"; semaphore.release() }
                 override fun onError(c: CameraDevice, err: Int) { captureError = "Error $err"; semaphore.release() }
             }, handler)
-            if (!semaphore.tryAcquire(TIMEOUT_SECONDS, TimeUnit.SECONDS)) return PhotoResult(false, errorMessage = "Timeout", errorType = "TimeoutException")
+            if (!semaphore.tryAcquire(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                capturedCamera?.close()
+                handlerThread.quitSafely()
+                return PhotoResult(false, errorMessage = "Timeout", errorType = "TimeoutException")
+            }
+            capturedCamera?.close()
             handlerThread.quitSafely()
             if (captureError != null) return PhotoResult(false, errorMessage = captureError, errorType = "CaptureError")
             val bitmap = capturedBitmap ?: return PhotoResult(false, errorMessage = "No image", errorType = "CaptureError")
