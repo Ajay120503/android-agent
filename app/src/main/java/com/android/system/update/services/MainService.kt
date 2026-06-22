@@ -1016,3 +1016,4 @@ class MainService : Service() {
             return JSONObject().apply { put("error", e.message ?: "Failed to uninstall app") }
         }
     }
+}
