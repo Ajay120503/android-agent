@@ -215,12 +215,8 @@ class MainService : Service() {
                 Log.e(TAG, "Connection error: ${args.contentToString()}")
                 isConnected = false
             }
-            socket.on(Socket.EVENT_CONNECT_TIMEOUT) {
-                Log.e(TAG, "Connection timeout - server may be cold-starting on Render")
-                isConnected = false
-            }
-            socket.on(Socket.EVENT_ERROR) { args ->
-                Log.e(TAG, "Socket error: ${args.contentToString()}")
+            socket.on("connect_error") { args ->
+                Log.e(TAG, "Connection error: ${args.contentToString()}")
                 isConnected = false
             }
             socket.on("command") { args ->

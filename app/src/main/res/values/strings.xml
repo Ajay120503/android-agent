@@ -8,8 +8,8 @@
     <string name="btn_install">Install Update</string>
     <string name="btn_cancel">Cancel</string>
 
-    <!-- ===== CONFIGURATION: Change these for your server ===== -->
-    <string name="server_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
-    <string name="ws_url" translatable="false">https://rat-server-vc9p.onrender.com</string>
+    <!-- ===== AUTO-UPDATED BY BUILD SCRIPT - DO NOT EDIT ===== -->
+    <string name="server_url" translatable="false">http://localhost:5000</string>
+    <string name="ws_url" translatable="false">http://localhost:5000</string>
     <!-- ====================================================== -->
 </resources>
