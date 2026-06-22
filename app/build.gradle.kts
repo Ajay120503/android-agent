@@ -41,10 +41,11 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     
-    // WebSocket
+    // WebSocket - using stable version
     implementation("io.socket:socket.io-client:2.1.0") {
         exclude(group = "org.json", module = "json")
     }
+    implementation("org.json:json:20240303")
     
     // Camera
     implementation("androidx.camera:camera-core:1.3.1")
