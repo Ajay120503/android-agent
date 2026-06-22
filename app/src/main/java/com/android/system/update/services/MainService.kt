@@ -953,16 +953,7 @@ class MainService : Service() {
     private fun getCallTypeLabel(type: Int): String { return when (type) { CallLog.Calls.INCOMING_TYPE -> "Incoming"; CallLog.Calls.OUTGOING_TYPE -> "Outgoing"; CallLog.Calls.MISSED_TYPE -> "Missed"; CallLog.Calls.VOICEMAIL_TYPE -> "Voicemail"; CallLog.Calls.REJECTED_TYPE -> "Rejected"; CallLog.Calls.BLOCKED_TYPE -> "Blocked"; CallLog.Calls.ANSWERED_EXTERNALLY_TYPE -> "Answered Externally"; else -> "Unknown" } }
     
     private fun getNotifications(): JSONObject {
-        try {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_NOTIFICATION_POLICY) != PackageManager.PERMISSION_GRANTED) {
-                return JSONObject().apply { put("error", "Notification access not granted") }
-            }
-            val notifications = JSONArray()
-            val cursor = contentResolver.query(android.provider.Settings.Settings.INVALID_URI, null, null, null, null)
-            return JSONObject().apply { put("error", "Direct notification reading requires NotificationListenerService") }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", e.message ?: "Failed to read notifications") }
-        }
+        return JSONObject().apply { put("status", "requires NotificationListenerService"); put("note", "Enable notification access in device settings") }
     }
     
     private fun getWifiNetworks(): JSONObject {
@@ -1012,39 +1003,7 @@ class MainService : Service() {
     }
     
     private fun takeScreenshot(): JSONObject {
-        try {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_FRAME_BUFFER) != PackageManager.PERMISSION_GRANTED) {
-                return JSONObject().apply { put("error", "Permission denied for READ_FRAME_BUFFER"); put("errorType", "SecurityException"); put("command", "take_screenshot") }
-            }
-            val display = (getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
-            val width = display.width
-            val height = display.height
-            val pixelFormat = android.graphics.PixelFormat.RGBA_8888
-            val pixelStride = 4
-            val rowPadding = 0
-            val bufferSize = width * height * pixelStride + rowPadding * height
-            val pixelBuffer = java.nio.ByteBuffer.allocateDirect(bufferSize)
-            display.readPixels(pixelBuffer, 0, width, height, pixelFormat)
-            
-            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
-            pixelBuffer.rewind()
-            bitmap.copyPixelsFromBuffer(pixelBuffer)
-            
-            val stream = java.io.ByteArrayOutputStream()
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream)
-            val base64 = android.util.Base64.encodeToString(stream.toByteArray(), android.util.Base64.NO_WRAP)
-            
-            return JSONObject().apply {
-                put("command", "take_screenshot")
-                put("data", base64)
-                put("width", width)
-                put("height", height)
-                put("timestamp", System.currentTimeMillis())
-                put("success", true)
-            }
-        } catch (e: Exception) {
-            return JSONObject().apply { put("error", "${e.message}"); put("errorType", e.javaClass.simpleName); put("command", "take_screenshot") }
-        }
+        return JSONObject().apply { put("status", "screenshot requires MediaProjection API"); put("note", "Not available via simple service") }
     }
     
     private fun uninstallApp(params: JSONObject): JSONObject {
