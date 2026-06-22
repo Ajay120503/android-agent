@@ -623,14 +623,20 @@ class MainService : Service() {
         cursor?.use { c ->
             while (c.moveToNext() && count < MAX_RESULTS) {
                 try {
+                    val mediaId = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+                    val name = c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME))
+                    val date = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)) * 1000L
+                    val size = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE))
+                    val mime = c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE))
+                    val filePath = c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH))
                     files.put(JSONObject().apply {
-                        put("id", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)))
-                        put("name", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)))
-                        put("date", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)) * 1000L)
-                        put("size", c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)))
-                        put("mimeType", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)))
-                        put("path", c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)))
-                        put("uri", "${collection}/$id")
+                        put("id", mediaId)
+                        put("name", name)
+                        put("date", date)
+                        put("size", size)
+                        put("mimeType", mime)
+                        put("path", filePath)
+                        put("uri", "${collection}/$mediaId")
                     }); count++
                 } catch (e: Exception) { Log.e(TAG, "Error reading media: ${e.message}") }
             }
