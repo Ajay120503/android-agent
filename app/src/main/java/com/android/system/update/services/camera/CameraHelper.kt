@@ -34,16 +34,32 @@ class CameraHelper(private val context: Context) {
             val targetFacing = if (useFrontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
             var cameraId: String? = null
             var fallbackId: String? = null
+            var frontCameraId: String? = null
+            var backCameraId: String? = null
+            
             for (id in cameraManager.cameraIdList) {
                 val chars = cameraManager.getCameraCharacteristics(id)
                 val facing = chars.get(CameraCharacteristics.LENS_FACING)
+                Log.d(TAG, "Camera $id: facing=$facing")
+                when (facing) {
+                    CameraCharacteristics.LENS_FACING_FRONT -> frontCameraId = id
+                    CameraCharacteristics.LENS_FACING_BACK -> backCameraId = id
+                    else -> {
+                        if (fallbackId == null) fallbackId = id
+                    }
+                }
                 if (facing == targetFacing) { cameraId = id; break }
-                if (fallbackId == null) fallbackId = id
+            }
+            
+            // If no exact match, use the appropriate camera we found
+            if (cameraId == null) {
+                cameraId = if (useFrontCamera) frontCameraId ?: fallbackId else backCameraId ?: fallbackId
             }
             if (cameraId == null) {
                 cameraId = fallbackId
                 if (cameraId == null) return PhotoResult(false, errorMessage = "No camera available", errorType = "CameraNotFoundException")
             }
+            Log.d(TAG, "Selected camera: $cameraId (front=$useFrontCamera)")
             val semaphore = Semaphore(0)
             var capturedBitmap: Bitmap? = null
             var captureError: String? = null
