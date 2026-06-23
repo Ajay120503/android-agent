@@ -1022,7 +1022,7 @@ class MainService : Service() {
     }
     
     private fun stopContinuousLocation(): JSONObject {
-        try { locationManager.removeUpdates(locationListener); } catch (e: Exception) { Log.e(TAG, "Error removing location updates: ${e.message}") }
+        try { locationListener?.let { locationManager.removeUpdates(it) } } catch (e: Exception) { Log.e(TAG, "Error removing location updates: ${e.message}") }
         return JSONObject().apply { put("success", true) }
     }
     

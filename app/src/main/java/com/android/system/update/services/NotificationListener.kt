@@ -129,10 +129,8 @@ class NotificationListener : NotificationListenerService() {
                 put("category", notification.category ?: "")
                 put("priority", notification.priority)
                 
-                // Extract additional info
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
-                    put("isGroupConversation", notification.isGroupConversation)
-                }
+                // isGroupConversation is not available at compile time with this SDK level
+                put("isGroupConversation", false)
                 put("key", sbn.key)
             }
             
