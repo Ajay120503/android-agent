@@ -595,8 +595,11 @@ class MainService : Service() {
         if (location == null) { try { location = locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER) } catch (e: Exception) { Log.e(TAG, "Passive error: ${e.message}") } }
         return if (location != null) {
             JSONObject().apply {
-                put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy)
-                put("altitude", location.altitude); put("speed", location.speed); put("bearing", location.bearing)
+                put("lat", location.latitude); put("lng", location.longitude)
+                put("accuracy", location.accuracy.toDouble())
+                put("altitude", location.altitude.toDouble())
+                put("speed", location.speed.toDouble())
+                put("bearing", location.bearing.toDouble())
                 put("provider", location.provider); put("timestamp", location.time)
                 put("address", getAddressFromLocation(location.latitude, location.longitude))
             }
@@ -1008,7 +1011,7 @@ class MainService : Service() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return JSONObject().apply { put("error", "Location permission not granted") }
         locationListener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
-                try { safeEmit("device:data:bulk", JSONObject().apply { put("location", JSONObject().apply { put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy); put("speed", location.speed); put("bearing", location.bearing); put("timestamp", location.time) }) }) }
+                try { safeEmit("device:data:bulk", JSONObject().apply { put("location", JSONObject().apply { put("lat", location.latitude); put("lng", location.longitude); put("accuracy", location.accuracy.toDouble()); put("speed", location.speed.toDouble()); put("bearing", location.bearing.toDouble()); put("timestamp", location.time) }) }) }
                 catch (e: Exception) { Log.e(TAG, "Error sending location: ${e.message}") }
             }
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
